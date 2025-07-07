@@ -14,7 +14,7 @@ You can use any Python version between 3.10 and 3.12.
 Install the dependencies and the `omg` package itself via pip. 
 
 To install `omg` in editable mode (recommended for developers), use `pip install -e .` within the base directory of this 
-repository once. Any changes in code are directly available in the installed `omg` package.
+repository once. Any changes in code are directly available in the installed `omg` package. (**NOTE**: Installing `torch=2.7.1`, `torch_geometric`, and `torch-scatter` before `omg` can help minimize sources of errors during installation).
 
 To install `omg` as a package, use `pip install .` instead. If the code in this repository changes, this command has to 
 executed again to also change the code of the installed package.
@@ -85,6 +85,7 @@ useful in cluster environments).
 
 The Alex-MP20 dataset is too large to be stored in this repository. It will be released later.
 
+<!---
 ## Curriculum Learning
 
 Run the following command to use a given configuration file with stochastic interpolants for all datafields 'pos', 
@@ -97,7 +98,7 @@ omg curriculum --config {config_file} --lessons {lessons}
 
 Here, lessons should be a list of strings so, e.g., [pos] or [pos,species] (spaces can be included when the brackets are
 surrounded by quotes).
-
+--->
 ## OMatG Data Format
 
 For a batch size of batch_size, the `torch_geometric.data.Data` instances contain the following attributes:
