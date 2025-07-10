@@ -12,7 +12,7 @@ which should be cited when using it.
 ## Table of Contents
 
 - [Dependencies](#dependencies)
-- 
+- [Examples](#examples)
 - [Training](#training)
 - [Sampling](#sampling)
 - [Visualize](#visualize)
@@ -34,12 +34,11 @@ repository once. Any changes in code are directly available in the installed `om
 To install `omg` as a package, use `pip install .` instead. If the code in this repository changes, this command has to 
 executed again to also change the code of the installed package.
 
-## Checkpoints
+## Examples
 
-Model checkpoints can be found at the [HuggingFace link](https://huggingface.co/OMatG) associated with OMatG. See details on [generating materials](#sampling) below.
+Tutorial notebooks for using OMatG are available on [Kaggle](https://www.kaggle.com/philipphoellmer/code). In particular the [Crystals](https://www.kaggle.com/code/philipphoellmer/generative-modeling-workshop-session-crystals-sol) and [Crystals Sol](https://www.kaggle.com/code/philipphoellmer/generative-modeling-workshop-session-crystals-sol) notebooks are relevant.
 
 ## Training
-
 
 
 Run the following command in any directory to train from scratch based on the configuration file `config.yaml`:
@@ -63,6 +62,9 @@ The training command can be executed in any directory. The configuration files c
 used, e.g., for training. The path to these data files can either be relative to the working directory, or relative to 
 the `omg` directory (that is, use `"data/mp_20/val.lmdb"` for `lmdb_paths` in order to use the `mp_20` data set as in 
 exemplary configuration files).
+
+> **NOTE**: Model checkpoints used in the paper can be found at the [HuggingFace link](https://huggingface.co/OMatG) associated with OMatG. See details on [generating materials](#sampling) with checkpoint files below.
+
 
 ## Sampling
 
