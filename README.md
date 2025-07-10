@@ -2,12 +2,23 @@
 
 ![csp movie](assets/csp_movie.gif)
 
-A generative model for crystal structure prediction and de novo generation of inorganic crystals. 
+A state-of-the-art generative model for crystal structure prediction and *de novo* generation of inorganic crystals. 
 
-This open-source framework accompanies the paper available at [OpenReview](https://openreview.net/forum?id=ka2jxtCrkK#discussion),
+This open-source framework accompanies the paper available on [arXiv](https://arxiv.org/abs/2502.02582),
 which should be cited when using it.
 
-**Note:** This repository is currently work in progress. 
+> **NOTE:** 🚧 This repository is currently work in progress. 🚧
+
+## Table of Contents
+
+- [Dependencies](#dependencies)
+- 
+- [Training](#training)
+- [Sampling](#sampling)
+- [Visualize](#visualize)
+- [Match Rate Computation](#match-rate-csp)
+- [Alex-MP20 Dataset](#alex-mp20-dataset)
+- [OMatG Data Format](#omatg-data-format)
 
 ## Dependencies
 
@@ -16,12 +27,20 @@ You can use any Python version between 3.10 and 3.12.
 Install the dependencies and the `omg` package itself via pip. 
 
 To install `omg` in editable mode (recommended for developers), use `pip install -e .` within the base directory of this 
-repository once. Any changes in code are directly available in the installed `omg` package. (**NOTE**: Installing `torch=2.7.1` based on your version of `CUDA` in addition to `torch_geometric`, and `torch-scatter` before installing `omg` can help minimize sources of errors).
+repository once. Any changes in code are directly available in the installed `omg` package. 
+
+> **NOTE**: Installing `torch=2.7.1` based on your version of `CUDA` in addition to `torch_geometric`, and `torch-scatter` before installing `omg` can help minimize sources of errors
 
 To install `omg` as a package, use `pip install .` instead. If the code in this repository changes, this command has to 
 executed again to also change the code of the installed package.
 
+## Checkpoints
+
+Model checkpoints can be found at the [HuggingFace link](https://huggingface.co/OMatG) associated with OMatG. See details on [generating materials](#sampling) below.
+
 ## Training
+
+
 
 Run the following command in any directory to train from scratch based on the configuration file `config.yaml`:
 
@@ -85,7 +104,7 @@ useful in cluster environments).
 
 ## Alex-MP20 dataset
 
-The Alex-MP20 dataset is too large to be stored in this repository. It will be released later.
+The Alex-MP20 dataset is too large to be stored in this repository. We have made it available via the [HuggingFace link](https://huggingface.co/OMatG) associated with this project.
 
 <!---
 ## Curriculum Learning
