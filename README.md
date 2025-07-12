@@ -17,8 +17,9 @@ which should be cited when using it.
 - [Sampling](#sampling)
 - [Visualize](#visualize)
 - [Match Rate Computation](#match-rate-csp)
-- [Alex-MP20 Dataset](#alex-mp20-dataset)
+- [Datasets](#datasets)
 - [OMatG Data Format](#omatg-data-format)
+- [Citing OMatG](#citing-omatg)
 
 ## Dependencies
 
@@ -33,6 +34,14 @@ repository once. Any changes in code are directly available in the installed `om
 
 To install `omg` as a package, use `pip install .` instead. If the code in this repository changes, this command has to 
 executed again to also change the code of the installed package.
+
+## Overview
+
+OMatG leverages [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) for model specification, training, and generation. To implement an OMatG model, one must specify a `config.yaml` file. See the [```omg/conf_examples```](omg/conf_examples) directory for some functional examples. Elements of model training and inference such as checkpointing and learning hyperparameters are handled specified in the configuration file and are handled by the [PyTorch Lightning Trainer](https://lightning.ai/docs/pytorch/stable/common/trainer.html?utm_term=&utm_campaign=PMax+Q1+FY26&utm_source=adwords&utm_medium=ppc&hsa_acc=1332059986&hsa_cam=22691136685&hsa_grp=&hsa_ad=&hsa_src=x&hsa_tgt=&hsa_kw=&hsa_mt=&hsa_net=adwords&hsa_ver=3&gad_source=1&gad_campaignid=22681463925&gbraid=0AAAAA9Wu012kR5bgEIP9NsR-6TV6-wOhC&gclid=CjwKCAjw7MLDBhAuEiwAIeXGIfbIFwl3BTbZ6uOAzPJyLtOYqBBOx9YwvtIwLXCN0bulE2jVBTrDyBoCJ6kQAvD_BwE)
+
+In a `config.yaml` file, one must specify a `SingleStochasticInterpolant` for each element of `(fractional_coordinates, lattice_vectors, atom_types)` by providing an [```Interpolant```](omg/si/interpolants.py) and a [```Gamma```](omg/si/gamma.py) plus additional parameters for training and sampling of the generative model (see [our paper](https://arxiv.org/abs/2502.02582) for more complete details). For `atom_types`, one must specify a [StochasticInterpolantSpecies](omg/si/abstracts.py) which has been implemented based on [discrete flow matching (DFM)](https://arxiv.org/abs/2402.04997) and is well-tailored to the discrete nature of generative modeling for chemical composition. [Four datasets](omg/data) have been provided, one of which must also be specified in this configuration file. 
+
+The generative process itself relies almost exclusively on classes found in the [```omg/si```](omg/si) directory. At a high level, one should focus on stringing together instantiations of the [```SingleStochasticInterpolant```](omg/si/single_stochastic_interpolant.py) class into one [```StochasticInterpolants```](omg/si/stochastic_interpolants.py) object. Each ```SingleStochasticInterpolant``` object provides an `interpolate` method which maps to an intermediate point, $x_t$, between the point, $x_0$, sampled from some base distribution, and some $x_1$ sampled from the training set. During training, a neural network, $b^{\theta}(t, x)$, is regressed onto the time derivative of $x(t, x_0, x_1, z)$ batchwise. Optionally, one can also regress another neural network, $z^{\phi}(t, x)$, onto the added noise, $z$. Each `StochasticInterpolant` provides a way to generate new data from some initial $x_0$ through the `integrate` method. This can be done via an ODE or an SDE once training is complete. See [Albergo et al.](https://arxiv.org/abs/2303.08797) for more details on the stochastic interpolants framework. 
 
 ## Examples
 
@@ -104,9 +113,15 @@ The validations, and the computations of the match rate and unique rate are para
 determined by `os.cpu_count()`. This can be changed by setting the `--number_cpus` argument (which is probably most 
 useful in cluster environments).
 
-## Alex-MP20 dataset
+## Datasets
 
-The Alex-MP20 dataset is too large to be stored in this repository. We have made it available via the [HuggingFace link](https://huggingface.co/OMatG) associated with this project.
+All datasets can be found in [```omg/data```](omg/data). They are each described briefly below:
+
+- MP-20 - 45,231 structures from the [Materials Project](https://pubs.aip.org/aip/apm/article/1/1/011002/119685/Commentary-The-Materials-Project-A-materials) with a maximum of 20 atoms per structure.
+- MPTS-52 - [Chronologically split data from the Materials Project](https://joss.theoj.org/papers/10.21105/joss.05618) with 40,476 structures and up to 52 atoms per structure.
+- Perov-5 - A [perovskite dataset](https://pubs.rsc.org/en/content/articlelanding/2012/ee/c2ee22341d) containing 18,928 structures each with five atoms per structure.
+- Carbon-24 - A [dataset](https://arxiv.org/abs/2110.06197) of 10,153 structures consisting only of carbon with up to 24 atoms per structure. We did NOT include this as a benchmark in our paper.
+- Alex-MP-20 - A [consolidated dataset](https://www.nature.com/articles/s41586-025-08628-5) of 675,204 structures of [Alexandria](https://arxiv.org/abs/2210.00579) and [MP-20](https://pubs.aip.org/aip/apm/article/1/1/011002/119685/Commentary-The-Materials-Project-A-materials) structures. The Alex-MP20 dataset is too large to be stored in this repository. We have made it available via the [HuggingFace link](https://huggingface.co/OMatG) associated with this project.
 
 <!---
 ## Curriculum Learning
@@ -134,3 +149,16 @@ belongs.
 - `ptr`: `torch.Tensor` of shape `(batch_size + 1,)` containing the indices of the first atom of each configuration in 
 the `species` and `pos` tensors.
 - `property`: dict containing the properties of the configurations.
+
+## Citing OMatG
+```bibtex
+@inproceedings{
+    hoellmer_open_2024,
+    title={Open Materials Generation with Stochastic Interpolants},
+    author={Philipp Höllmer and Thomas Egg and Maya M. Martirossyan and Eric Fuemmeler and Amit Gupta and Zeren Shui and Pawan Prakash and Adrian Roitberg and Mingjie Liu and George Karypis and Mark Transtrum and Richard G. Hennig and Ellad B. Tadmor and Stefano Martiniani},
+    booktitle={Forty-second International Conference on Machine Learning},
+    year={2025},
+    url={https://openreview.net/forum?id=gHGrzxFujU},
+    note={Also at {\ttfamily arXiv:2502.02582} (\url{https://arxiv.org/abs/2502.02582})},
+}
+```
