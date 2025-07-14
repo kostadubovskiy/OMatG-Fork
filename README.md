@@ -1,11 +1,16 @@
 # OMatG: Open Materials Generation
 
+[![arXiv](https://img.shields.io/badge/arXiv-2502.02582-maroon)](https://arxiv.org/abs/2502.02582)
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=000)](https://huggingface.co/OMatG)
+[![Python](https://img.shields.io/badge/python-3.10--3.13-blue?logo=python)](https://www.python.org/)
+
+
 ![csp movie](assets/csp_movie.gif)
 
 A state-of-the-art generative model for crystal structure prediction and *de novo* generation of inorganic crystals. 
 
 This open-source framework accompanies the paper available on [arXiv](https://arxiv.org/abs/2502.02582),
-which should be cited when using it.
+which should be [cited](#citing-omatg) when using it.
 
 > **NOTE:** 🚧 This repository is currently work in progress. 🚧
 
