@@ -34,7 +34,7 @@ class StochasticInterpolants(object):
     """  # noqa: E501
 
     def __init__(self, stochastic_interpolants: Sequence[StochasticInterpolant], data_fields: Sequence[str],
-                 integration_time_steps: int) -> None:
+                 integration_time_steps: int, enable_progress_bar: bool = True) -> None:
         """Constructor of the StochasticInterpolants class."""
         super().__init__()
         if not len(stochastic_interpolants) == len(data_fields):
@@ -48,6 +48,7 @@ class StochasticInterpolants(object):
             raise ValueError("The number of integration time steps must be positive.")
         self._stochastic_interpolants = stochastic_interpolants
         self._integration_time_steps = integration_time_steps
+        self._enable_progress_bar = enable_progress_bar
 
     def __len__(self) -> int:
         """
@@ -240,7 +241,7 @@ class StochasticInterpolants(object):
             inter_list = [x_t]
         else:
             inter_list = None
-        for t_index in trange(1, len(times), desc='Integrating'):
+        for t_index in trange(1, len(times), desc='Integrating', disable=not self._enable_progress_bar):
             t = times[t_index - 1]
             dt = times[t_index] - times[t_index - 1]
             for stochastic_interpolant, data_field in zip(self._stochastic_interpolants, self._data_fields):
