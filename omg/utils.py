@@ -3,12 +3,10 @@ from pathlib import Path
 from typing import List, Union
 from ase import Atoms
 from ase.io import read, write
-from lightning.pytorch.callbacks import LearningRateFinder
-from lightning.pytorch.loggers.wandb import WandbLogger
-import matplotlib.pyplot as plt
 import torch
 from torch_geometric.data import Data
 import numpy as np
+
 
 class DataField(Enum):
     pos = auto()
@@ -110,21 +108,6 @@ def convert_ase_atoms_to_data(all_configs: List[Atoms]) -> Data:
         all_cell[config_index] = torch.tensor(cell[:])
 
     return Data(pos=all_pos, cell=all_cell, species=all_species, ptr=ptr, n_atoms=n_atoms, batch=batch)
-
-
-class OMGLearningRateFinder(LearningRateFinder):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def on_fit_start(self, trainer, pl_module):
-        self.lr_find(trainer, pl_module)
-        self.optimal_lr.plot(suggest=True)
-        if isinstance(trainer.logger, WandbLogger):
-            # See https://github.com/Lightning-AI/pytorch-lightning/issues/2725
-            directory = trainer.logger.experiment.dir
-        else:
-            directory = trainer.logger.log_dir
-        plt.savefig(directory + "/lr-finder.png")
 
 
 # Copied from https://github.com/jiaor17/DiffCSP/blob/7121d159826efa2ba9500bf299250d96da37f146/diffcsp/common/data_utils.py
