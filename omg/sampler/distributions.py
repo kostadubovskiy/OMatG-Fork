@@ -36,7 +36,7 @@ class InformedLatticeDistribution(object):
         elif dataset_name == "mpts_52":
             self._length_log_means = [1.6565313339233398, 1.8407557010650635, 2.1225264072418213]
             self._length_log_stds = [0.2952289581298828, 0.3340013027191162, 0.41885802149772644]
-        elif dataset_name == "perov":
+        elif dataset_name == "perov_5":
             self._length_log_means = [1.419227957725525, 1.419227957725525, 1.419227957725525]
             self._length_log_stds = [0.07268335670232773, 0.07268335670232773, 0.07268335670232773]
         elif dataset_name == "alex_mp_20":
