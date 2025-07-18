@@ -1,6 +1,6 @@
 from enum import Enum, auto
 from pathlib import Path
-from typing import List, Union
+from typing import List, Sequence, Union
 from ase import Atoms
 from ase.io import read, write
 import torch
@@ -81,7 +81,7 @@ def xyz_reader(filename: Path) -> List[Atoms]:
     return all_configs
 
 
-def convert_ase_atoms_to_data(all_configs: List[Atoms]) -> Data:
+def convert_ase_atoms_to_data(all_configs: Sequence[Atoms]) -> Data:
     """
     Convert a list of ASE Atoms objects to a PyTorch Geometric Data object.
     """

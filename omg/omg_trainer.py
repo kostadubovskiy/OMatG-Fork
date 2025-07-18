@@ -1,28 +1,28 @@
-from argparse import ArgumentParser
 from collections import OrderedDict
+import json
 from math import log
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional, Sequence
+import warnings
 from ase import Atoms
 from ase.io import write
 from lightning.pytorch import Trainer
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
-from scipy.stats import lognorm
+from scipy.stats import lognorm, wasserstein_distance
 from sklearn.neighbors import KernelDensity
 import tqdm
 import torch
 from torch_geometric.data import Data
-import yaml
 from omg.omg_lightning import OMGLightning
 from omg.datamodule.dataloader import OMGDataModule, OMGTorchDataset
 from omg.globals import MAX_ATOM_NUM
 from omg.sampler.minimum_permutation_distance import correct_for_minimum_permutation_distance
 from omg.si.corrector import PeriodicBoundaryConditionsCorrector
-from omg.utils import convert_ase_atoms_to_data, xyz_reader, DataField
-from omg.analysis import (get_coordination_numbers, get_coordination_numbers_species, get_space_group,
-                          match_rate_and_rmsd, unique_rate, ValidAtoms)
+from omg.utils import convert_ase_atoms_to_data, xyz_reader
+from omg.analysis import (get_coordination_numbers, get_coordination_numbers_species, get_cov, get_space_group,
+                          get_volume_frac, match_rmsds, ValidAtoms)
 
 
 class OMGTrainer(Trainer):
@@ -75,7 +75,7 @@ class OMGTrainer(Trainer):
         self._plot_to_pdf(ref_atoms, init_atoms, gen_atoms, plot_name, model.use_min_perm_dist, symmetry_filename)
 
     @staticmethod
-    def _load_dataset_atoms(dataset: OMGTorchDataset, fractional: bool = True) -> List[Atoms]:
+    def _load_dataset_atoms(dataset: OMGTorchDataset, fractional: bool = True) -> list[Atoms]:
         """
         Load lmdb file atoms into a list of Atoms instances.
         """
@@ -94,7 +94,7 @@ class OMGTrainer(Trainer):
         return all_ref_atoms
 
     @staticmethod
-    def _plot_to_pdf(reference: List[Atoms], initial: List[Atoms], generated: List[Atoms], plot_name: str,
+    def _plot_to_pdf(reference: Sequence[Atoms], initial: Sequence[Atoms], generated: Sequence[Atoms], plot_name: str,
                      use_min_perm_dist: bool, symmetry_filename: Path) -> None:
         """
         Plot figures for data analysis/matching between test and generated data.
@@ -568,13 +568,28 @@ class OMGTrainer(Trainer):
             plt.close()
 
     def match(self, model: OMGLightning, datamodule: OMGDataModule, xyz_file: str, skip_validation: bool = False,
-              skip_match: bool = False, skip_unique: bool = False, number_cpus: Optional[int] = None,
-              match_everyone: bool = False, xyz_file_test_data: Optional[str] = None) -> None:
+              skip_match: bool = False, ltol: float = 0.3, stol: float = 0.5, angle_tol: float = 10.0,
+              number_cpus: Optional[int] = None, upper_narity_limit: Optional[int] = None,
+              xyz_file_prediction_data: Optional[str] = None, check_reduced: bool = True,
+              result_name: str = "match.json", plot_name: str = "rmsds.pdf") -> None:
         """
-        Compute the match rate between the generated structures and the structures in the prediction dataset, as well as
-        the unique rate of the generated structures.
+        Compute the match rate between the generated structures and the structures in the prediction dataset.
 
-        The match rate is one of the benchmarks for the crystal-structure prediction task used by DiffCSP and FlowMM.
+        The match rate is one of the benchmarks for the crystal-structure prediction task used by CDVAE, DiffCSP, and
+        FlowMM.
+
+        By default, this method first validates the generated structures and the structures in the prediction dataset
+        based on volume, structure, composition, and fingerprint checks (see ValidAtoms class), and calculates the match
+        rate between the valid generated structures and the valid structures in the prediction dataset. The validation
+        can be skipped by setting the `skip_validation` argument to True.
+
+        This method matches structures at the same index in the generated dataset and the prediction dataset.
+
+        Structures are considered to match based on PyMatgen's StructureMatcher (see
+        https://pymatgen.org/pymatgen.analysis.html). The default tolerances for the matcher are taken from CDVAE,
+        DiffCSP, and FlowMM.
+
+        This method also plots the histogram of the root-mean-square distances between the matched structures.
 
         :param model:
             OMG model (argument required and automatically passed by lightning CLI).
@@ -595,43 +610,77 @@ class OMGTrainer(Trainer):
             Defaults to False.
             This argument can be optionally set on the command line.
         :type skip_match: bool
-        :param skip_unique:
-            Whether to skip the calculation of the unique rate.
-            Defaults to False.
+        :param ltol:
+            Fractional length tolerance for PyMatgen's StructureMatcher.
+            Defaults to 0.3.
             This argument can be optionally set on the command line.
-        :type skip_unique: bool
+        :type ltol: float
+        :param stol:
+            Site tolerance for PyMatgen's StructureMatcher.
+            Defaults to 0.5.
+            This argument can be optionally set on the command line.
+        :type stol: float
+        :param angle_tol:
+            Angle tolerance in degrees for PyMatgen's StructureMatcher.
+            Defaults to 10.0.
+            This argument can be optionally set on the command line.
+        :type angle_tol: float
         :param number_cpus:
             Number of CPUs to use for multiprocessing. If None, use os.cpu_count().
             Defaults to None.
             This argument can be optionally set on the command line.
         :type number_cpus: Optional[int]
-        :param match_everyone:
-            Whether to try to match every generated structure with every structure in the prediction dataset.
-            If False, only structures at the same index in the generated dataset and the prediction dataset are matched.
-            Defaults to False.
-            This argument can be optionally set on the command line.
-        :type match_everyone: bool
-        :param xyz_file_test_data:
-            XYZ file containing the test data structures.
-            If None, the test data structures are loaded from the datamodule.
+        :param upper_narity_limit:
+            The upper limit for the n-arity of the composition during validation check.
+            If the number of unique elements in a structure exceeds this limit, the structure is considered invalid.
+            Validation of structures with large n-arities is very slow so using this limit can speed up the validation
+            process significantly.
+            If None, no limit is set.
+            Defaults to None.
+        :type upper_narity_limit: Optional[int]
+        :param xyz_file_prediction_data:
+            XYZ file containing the prediction data structures.
+            If None, the prediction data structures are loaded from the datamodule.
             Defaults to None.
             This argument can be optionally set on the command line.
-        :type xyz_file_test_data: Optional[str]
+        :type xyz_file_prediction_data: Optional[str]
+        :param check_reduced:
+            If True, two structures will be checked to match even if only their reduced compositions match. If False,
+            the structures will be checked to match only if their full compositions match.
+            Defaults to True.
+            This argument can be optionally set on the command line.
+        :type check_reduced: bool
+        :param result_name:
+            Name of the json file to save the match results.
+            Defaults to "match.json".
+            This argument can be optionally set on the command line.
+        :type result_name: str
+        :param plot_name:
+            Name of the file to save the RMSD distribution plot.
+            Defaults to "rmsds.pdf".
+            This argument can be optionally set on the command line.
+        :type plot_name: str
 
         :raises FileNotFoundError:
-            If the file does not exist.
+            If the prediction data file does not exist.
+        :raises ValueError:
+            If both `skip_validation` and `skip_match` are True.
+            If the `result_name` does not end with .json.
         """
-        if skip_validation and skip_match and skip_unique:
+        if skip_validation and skip_match:
             raise ValueError("Everything is skipped, nothing to do.")
 
         final_file = Path(xyz_file)
         if not final_file.exists():
             raise FileNotFoundError(f"File {final_file} does not exist.")
 
+        if not result_name.endswith(".json"):
+            raise ValueError("The result_name must end with .json")
+
         # Get atoms
         gen_atoms = xyz_reader(final_file)
-        if xyz_file_test_data is not None:
-            test_file = Path(xyz_file_test_data)
+        if xyz_file_prediction_data is not None:
+            test_file = Path(xyz_file_prediction_data)
             if not test_file.exists():
                 raise FileNotFoundError(f"File {test_file} does not exist.")
             ref_atoms = xyz_reader(test_file)
@@ -639,94 +688,218 @@ class OMGTrainer(Trainer):
             ref_atoms = self._load_dataset_atoms(datamodule.predict_dataset,
                                                  datamodule.predict_dataset.convert_to_fractional)
 
-        # TODO: Do we want to filter atoms everywhere?
         gen_valid_atoms = ValidAtoms.get_valid_atoms(gen_atoms, desc="Validating generated structures",
-                                                     skip_validation=skip_validation, number_cpus=number_cpus)
+                                                     skip_validation=skip_validation, number_cpus=number_cpus,
+                                                     upper_narity_limit=upper_narity_limit)
         ref_valid_atoms = ValidAtoms.get_valid_atoms(ref_atoms, desc="Validating reference structures",
-                                                     skip_validation=skip_validation, number_cpus=number_cpus)
+                                                     skip_validation=skip_validation, number_cpus=number_cpus,
+                                                     upper_narity_limit=upper_narity_limit)
 
         if not skip_validation:
             print(f"Rate of valid structures in reference dataset: "
-                  f"{100 * sum(va.valid for va in ref_valid_atoms) / len(ref_atoms)}%.")
+                  f"{100 * sum(va.valid for va in ref_valid_atoms) / len(ref_valid_atoms)}%.")
             print(f"Rate of valid structures in generated dataset: "
-                  f"{100 * sum(va.valid for va in gen_valid_atoms) / len(gen_atoms)}%.")
+                  f"{100 * sum(va.valid for va in gen_valid_atoms) / len(gen_valid_atoms)}%.")
 
         if not skip_match:
-            # Tolerances from DiffCSP and FlowMM.
-            fmr, frmsd, vmr, vrmsd = match_rate_and_rmsd(gen_valid_atoms, ref_valid_atoms, ltol=0.3, stol=0.5,
-                                                         angle_tol=10.0, number_cpus=number_cpus,
-                                                         match_everyone=match_everyone)
-            print(f"The match rate between all generated structures and the full dataset is {100 * fmr}%.")
-            print(f"The mean root-mean-square distance, normalized by (V / N) ** (1/3), between all generated structures "
-                  f"and the full dataset is {frmsd}.")
-            print(f"The match rate between valid generated structures and the valid dataset is {100 * vmr}%.")
-            print(f"The mean root-mean-square distance, normalized by (V / N) ** (1/3), between valid generated structures "
-                  f"and the valid dataset is {vrmsd}.")
+            rmsds, valid_rmsds = match_rmsds(
+                gen_valid_atoms, ref_valid_atoms, ltol=ltol, stol=stol, angle_tol=angle_tol, number_cpus=number_cpus,
+                check_reduced=check_reduced)
+            assert len(rmsds) == len(valid_rmsds) == len(gen_valid_atoms)
 
-        if not skip_unique:
-            r = unique_rate(gen_valid_atoms, ltol=0.3, stol=0.5, angle_tol=10.0, number_cpus=number_cpus)
-            print(f"The occurence of unique structures within the generated dataset is {100 * r}%.")
+            match_count = sum(rmsd is not None for rmsd in rmsds)
+            match_rate = match_count / len(gen_valid_atoms)
+            filtered_rmsds = [rmsd for rmsd in rmsds if rmsd is not None]
+            mean_rmsd = np.mean(filtered_rmsds)
 
-    def curriculum(self, model: OMGLightning, datamodule: OMGDataModule, lessons: List[str]) -> None:
+            valid_match_count = sum(rmsd is not None for rmsd in valid_rmsds)
+            valid_match_rate = valid_match_count / len(gen_valid_atoms)
+            filtered_valid_rmsds = [rmsd for rmsd in valid_rmsds if rmsd is not None]
+            mean_valid_rmsd = np.mean(filtered_valid_rmsds)
+
+            print(f"The match rate between all generated structures and the prediction dataset is "
+                  f"{100.0 * match_rate}%.")
+            print(f"The mean root-mean-square distance, normalized by (V / N) ** (1/3), between all generated "
+                  f"structures and the prediction dataset is {mean_rmsd}.")
+            print()
+            print(f"The match rate between valid generated structures and the valid prediction dataset is "
+                  f"{100.0 * valid_match_rate}%.")
+            print(f"The mean root-mean-square distance, normalized by (V / N) ** (1/3), between valid generated "
+                  f"structures and the valid prediction dataset is {mean_valid_rmsd}.")
+
+            with open(result_name, "w") as f:
+                json.dump({
+                    "match_rate": match_rate,
+                    "mean_rmsd": mean_rmsd,
+                    "valid_match_rate": valid_match_rate,
+                    "mean_valid_rmsd": mean_valid_rmsd
+                }, f, indent=4)
+
+            plt.figure()
+            bandwidth = np.std(filtered_rmsds) * len(filtered_rmsds) ** (-1 / 5)  # Scott's rule.
+            filtered_rmsds = np.array(filtered_rmsds)[:, np.newaxis]
+            filtered_valid_rmsds = np.array(filtered_valid_rmsds)[:, np.newaxis]
+            max_rmsd = max(filtered_rmsds.max(), filtered_valid_rmsds.max())
+            x_d = np.linspace(0.0, max_rmsd + 0.1 * max_rmsd, 1000)[:, np.newaxis]
+            kde = KernelDensity(kernel="tophat", bandwidth=bandwidth).fit(filtered_rmsds)
+            log_density = kde.score_samples(x_d)
+            kde_val = KernelDensity(kernel="tophat", bandwidth=bandwidth).fit(filtered_valid_rmsds)
+            log_density_val = kde_val.score_samples(x_d)
+            plt.plot(x_d, np.exp(log_density), color="blueviolet", label="All")
+            plt.plot(x_d, np.exp(log_density_val), color="darkslategrey", label="Valid")
+            plt.xlabel(r"RMSD distribution ($\AA^3$)")
+            plt.ylabel("Density")
+            plt.title("RMSD")
+            plt.legend()
+            plt.savefig(plot_name)
+            plt.close()
+
+    def dng_metrics(self, model: OMGLightning, datamodule: OMGDataModule, xyz_file: str,
+                    dataset_name: str, number_cpus: Optional[int] = None,
+                    xyz_file_prediction_data: Optional[str] = None, result_name: str = "dng_metrics.json") -> None:
         """
-        Write a config file for a particular "lesson" in curriculum learning style whereby only the stochastic
-        interpolants for the given data fields are kept intact. All other stochastic interpolants will be replaced
-        with the identity interpolant.
+        Compute the de-novo generation metrics for the generated structures.
 
-        The possible lessons are "pos", "cell", and "species" or any combination of them.
+        The metrics include
+
+
+                    metrics: Sequence[str] = ('cov_precision', 'cov_recall',
+                                              'wdist_density', 'wdist_vol_frac', 'wdist_N', 'wdist_Nary', 'wdist_CN',
+                                              'validity_rate', 'valid_struc', 'valid_comp'),
+
+        Validity rate, coverage, and property distributions are computed.
 
         :param model:
             OMG model (argument required and automatically passed by lightning CLI).
         :type model: OMGLightning
         :param datamodule:
             OMG datamodule (argument required and automatically passed by lightning CLI).
-        :type datamodule: OMGDataModule
-        :param lessons:
-            List of data fields for which the stochastic interpolants should be kept intact.
-        :type lessons: List[str]
+        :param xyz_file:
+            XYZ file containing the generated structures.
+            This argument has to be set on the command line.
+        :type xyz_file: str
+        :param dataset_name:
+            Name of the dataset used for the prediction data structures.
+            This is used to set the cutoffs for the coverage metrics.
+            Coverage metrics are only computed for the datasets "mp_20", "carbon_24", and "perov_5".
+            If None, no coverage metrics are computed.
+            Defaults to None.
+            This argument can be optionally set on the command line.
+        :param number_cpus:
+            Number of CPUs to use for multiprocessing. If None, use os.cpu_count().
+            Defaults to None.
+            This argument can be optionally set on the command line.
+        :type number_cpus: Optional[int]
+        :param xyz_file_prediction_data:
+            XYZ file containing the prediction data structures.
+            If None, the prediction data structures are loaded from the datamodule.
+            Defaults to None.
+            This argument can be optionally set on the command line.
+        :type xyz_file_prediction_data: Optional[str]
+        :param result_name:
+            Name of the json file to save the match results.
+            Defaults to "dng_metrics.json".
+            This argument can be optionally set on the command line.
+        :type result_name: str
 
-        :raises ValueError:
-            If an invalid lesson is given.
+        :raises FileNotFoundError:
+            If the file does not exist.
         """
-        # Since LightningCLI already expects the config command-line argument, there is apparently no way to make
-        # it an argument of this function. Therefore, we just parse it from the given command-line arguments again.
-        parser = ArgumentParser()
-        parser.add_argument("--config", type=str)
-        args, _ = parser.parse_known_args()
-        config_file = args.config
+        final_file = Path(xyz_file)
+        if not final_file.exists():
+            raise FileNotFoundError(f"File {final_file} does not exist.")
 
-        try:
-            df_lessons = [DataField[lesson] for lesson in lessons]
-        except KeyError:
-            raise ValueError(f"Invalid lesson in {lessons}, allowed lessons are {[df.name for df in DataField]}")
+        if dataset_name is not None and dataset_name not in ("mp_20", "carbon_24", "perov_5"):
+            warnings.warn("Coverage metrics can only be computed for the datasets 'mp_20', 'carbon_24', and "
+                          "'perov_5'.")
 
-        with open(config_file, 'r') as file:
-            template = yaml.safe_load(file)
+        if not result_name.endswith(".json"):
+            raise ValueError("The result_name must end with .json")
 
-        # Get interpolant and swap with identity
-        interpolants = template['model']['si']['init_args']['stochastic_interpolants']
-        distributions = template['model']['sampler']['init_args']
-        costs = template['model']['relative_si_costs']
-        data_fields = template['model']['si']['init_args']['data_fields']
+        # Get atoms
+        gen_atoms = xyz_reader(final_file)
+        if xyz_file_prediction_data is not None:
+            test_file = Path(xyz_file_prediction_data)
+            if not test_file.exists():
+                raise FileNotFoundError(f"File {test_file} does not exist.")
+            ref_atoms = xyz_reader(test_file)
+        else:
+            ref_atoms = self._load_dataset_atoms(datamodule.predict_dataset,
+                                                 datamodule.predict_dataset.convert_to_fractional)
 
-        for i, df in enumerate(data_fields):
-            # This should not fail because the config file was already parsed.
-            if DataField[df] not in df_lessons:
-                distributions[f'{df}_distribution'] = {'class_path': 'omg.sampler.distributions.MirrorData'}
-                interpolants[i] = {
-                    'class_path': 'omg.si.single_stochastic_interpolant_identity.SingleStochasticInterpolantIdentity'}
-                costs[i] = 0.0
+        gen_valid_atoms = ValidAtoms.get_valid_atoms(gen_atoms, desc="Validating generated structures",
+                                                     number_cpus=number_cpus)
+        ref_valid_atoms = ValidAtoms.get_valid_atoms(ref_atoms, desc="Validating reference structures",
+                                                     number_cpus=number_cpus)
 
-        # Renormalize costs.
-        new_total_costs = sum(costs)
-        for i in range(len(costs)):
-            costs[i] = costs[i] / new_total_costs
+        # Validity rates.
+        print("Validity metrics:")
+        valid_rate = sum(va.valid for va in gen_valid_atoms) / len(gen_valid_atoms)
+        print(f"{valid_rate=}")
+        valid_comp_rate = sum(va.composition_valid for va in gen_valid_atoms) / len(gen_valid_atoms)
+        print(f"{valid_comp_rate=}")
+        valid_struc_rate = sum(va.structure_valid for va in gen_valid_atoms) / len(gen_valid_atoms)
+        print(f"{valid_struc_rate=}")
+        print()
 
-        # Save lesson.
-        old_path = Path(config_file)
-        new_filename = str(old_path.with_stem(old_path.stem + "_" + "_".join(lessons) + "_lesson"))
-        with open(new_filename, 'w') as file:
-            yaml.safe_dump(template, file)
+        # Wasserstein distance metrics.
+        print("Wasserstein distance metrics:")
+        gen_densities = [struc.structure.density for struc in gen_valid_atoms]
+        ref_densities = [struc.structure.density for struc in ref_valid_atoms]
+        wdist_density = wasserstein_distance(gen_densities, ref_densities)
+        print(f"{wdist_density=}")
+
+        gen_volume_fractions = [get_volume_frac(struc.structure) for struc in gen_valid_atoms]
+        ref_volume_fractions = [get_volume_frac(struc.structure) for struc in ref_valid_atoms]
+        wdist_vol_frac = wasserstein_distance(gen_volume_fractions, ref_volume_fractions)
+        print(f"{wdist_vol_frac=}")
+
+        gen_number_atoms = [len(struc.structure.species) for struc in gen_valid_atoms]
+        ref_number_atoms = [len(struc.structure.species) for struc in ref_valid_atoms]
+        wdist_number_atoms = wasserstein_distance(gen_number_atoms, ref_number_atoms)
+        print(f"{wdist_number_atoms=}")
+
+        gen_narity = [len(set(struc.structure.species)) for struc in gen_valid_atoms]
+        ref_narity = [len(set(struc.structure.species)) for struc in ref_valid_atoms]
+        wdist_narity = wasserstein_distance(gen_narity, ref_narity)
+        print(f"{wdist_narity=}")
+
+        gen_coordination_numbers = [np.mean(get_coordination_numbers(struc.atoms)) for struc in gen_valid_atoms]
+        ref_coordination_numbers = [np.mean(get_coordination_numbers(struc.atoms)) for struc in ref_valid_atoms]
+        wdist_coordination_numbers = wasserstein_distance(gen_coordination_numbers, ref_coordination_numbers)
+        print(f"{wdist_coordination_numbers=}")
+        print()
+
+        if dataset_name is not None and dataset_name in ("mp_20", "carbon_24", "perov_5"):
+            # Taken from https://github.com/jiaor17/DiffCSP/blob/7121d159826efa2ba9500bf299250d96da37f146/scripts/compute_metrics.py
+            COV_Cutoffs = {
+                "mp_20": {"struc": 0.4, "comp": 10.0},
+                "carbon_24": {"struc": 0.2, "comp": 4.0},
+                "perov_5": {"struc": 0.2, "comp": 4}
+            }
+            assert dataset_name in COV_Cutoffs
+            struc_cutoff = COV_Cutoffs[dataset_name]["struc"]
+            comp_cutoff = COV_Cutoffs[dataset_name]["comp"]
+            cov_recall, cov_precision = get_cov(gen_valid_atoms, ref_valid_atoms, struc_cutoff, comp_cutoff, None)
+            print(f"Coverage metrics for {dataset_name}:")
+            print(f"{cov_recall=}")
+            print(f"{cov_precision=}")
+        else:
+            cov_recall, cov_precision = None, None
+
+        with open(result_name, "w") as f:
+            json.dump({
+                "valid_rate": valid_rate,
+                "valid_comp_rate": valid_comp_rate,
+                "valid_struc_rate": valid_struc_rate,
+                "wdist_density": wdist_density,
+                "wdist_vol_frac": wdist_vol_frac,
+                "wdist_number_atoms": wdist_number_atoms,
+                "wdist_narity": wdist_narity,
+                "wdist_coordination_numbers": wdist_coordination_numbers,
+                "cov_recall": cov_recall,
+                "cov_precision": cov_precision
+            }, f, indent=4)
 
     def fit_lattice(self, model: OMGLightning, datamodule: OMGDataModule) -> None:
         """

@@ -8,8 +8,9 @@ from matminer.featurizers.composition.composite import ElementProperty
 import numpy as np
 from pymatgen.core import Composition, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
-import smact.screening
+from smact.screening import smact_validity
 from tqdm.contrib.concurrent import process_map
+from tqdm import tqdm
 
 
 class ValidAtoms(object):
@@ -23,10 +24,14 @@ class ValidAtoms(object):
 
     The structure is considered valid if all pairwise distances are larger than a given cutoff (default: 0.5 Å).
 
-    The composition is considered valid if it is valid according to the SMACT rules.
+    The composition is considered valid if it is valid according to the SMACT rules. Because the checking of the SMACT
+    rules can be slow for compositions with a high n-arity, the upper limit for the n-arity can be set. If the n-arity
+    exceeds the upper limit, the composition is automatically considered invalid.
 
     This class also computes the CrystalNN structural fingerprints and the normalized Magpie compositional fingerprints.
     If the computation of the fingerprints fails, the atoms are considered invalid.
+
+    Note that the (slow) composition and fingerprint checks are only run if the volume and structure checks pass.
 
     :param atoms:
         The Atoms instance to validate.
@@ -51,15 +56,26 @@ class ValidAtoms(object):
         Whether to skip the validation and return a list of ValidAtoms instances with all properties set to True.
         Defaults to False.
     :type skip_validation: bool
+    :param upper_narity_limit:
+        The upper limit for the n-arity of the composition.
+        Compositions with a higher n-arity are automatically considered invalid in the SMACT check.
+        If None, no limit is set.
+        Defaults to None.
+    :type upper_narity_limit: Optional[int]
     """
 
     _CrystalNNFP = CrystalNNFingerprint.from_preset("ops")
-    with warnings.catch_warnings(action="ignore"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
         _CompFP = ElementProperty.from_preset("magpie")
 
     def __init__(self, atoms: Atoms, volume_check_cutoff: float = 0.1, structure_check_cutoff: float = 0.5,
-                 use_pauling_test: bool = True, include_alloys: bool = True, skip_validation: bool = False) -> None:
+                 use_pauling_test: bool = True, include_alloys: bool = True, skip_validation: bool = False,
+                 upper_narity_limit: Optional[int] = None) -> None:
         """Constructor of the ValidAtoms class."""
+        if upper_narity_limit is not None and upper_narity_limit < 1:
+            raise ValueError("The upper n-arity limit must be at least 1.")
+        self._upper_narity_limit = upper_narity_limit
         self._atoms = atoms
         self._structure = AseAtomsAdaptor.get_structure(atoms)
         self._composition = self._structure.composition
@@ -75,20 +91,29 @@ class ValidAtoms(object):
         else:
             self._volume_valid = self._structure.volume > volume_check_cutoff
             self._structure_valid = self._structure_check(self._structure, self._structure_check_cutoff)
-            self._composition_valid = self._smact_check(self._composition, self._use_pauling_test, self._include_alloys)
-            with warnings.catch_warnings(action="ignore"):
-                try:
-                    self._composition_fingerprint, self._structure_fingerprint = self._get_fingerprints(
-                        self._composition, self._structure)
-                    self._fingerprint_valid = True
-                except ValueError:
-                    self._composition_fingerprint, self._structure_fingerprint = None, None
-                    self._fingerprint_valid = False
+            if self._volume_valid and self._structure_valid:
+                self._composition_valid = self._smact_check(self._composition, self._use_pauling_test,
+                                                            self._include_alloys, self._upper_narity_limit)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    try:
+                        self._composition_fingerprint, self._structure_fingerprint = self._get_fingerprints(
+                            self._composition, self._structure)
+                        self._fingerprint_valid = True
+                    except (ValueError, TypeError):
+                        self._composition_fingerprint, self._structure_fingerprint = None, None
+                        self._fingerprint_valid = False
+            else:
+                self._composition_valid = False
+                self._fingerprint_valid = False
+                self._composition_fingerprint, self._structure_fingerprint = None, None
 
     @staticmethod
     def get_valid_atoms(atoms: Sequence[Atoms], volume_check_cutoff: float = 0.1, structure_check_cutoff: float = 0.5,
                         use_pauling_test: bool = True, include_alloys: bool = True, desc: Optional[str] = None,
-                        skip_validation: bool = False, number_cpus: Optional[int] = None) -> List["ValidAtoms"]:
+                        skip_validation: bool = False, number_cpus: Optional[int] = None,
+                        enable_progress_bar: bool = True,
+                        upper_narity_limit: Optional[None] = None) -> List["ValidAtoms"]:
         """
         Generate a list of ValidAtoms instances from a list of Atoms instances in parallel.
 
@@ -123,6 +148,15 @@ class ValidAtoms(object):
             The number of CPUs to use for parallelization. If None, use os.cpu_count().
             Defaults to None.
         :type number_cpus: Optional[int]
+        :param enable_progress_bar:
+            Whether to enable the progress bar.
+            Defaults to True.
+        :type enable_progress_bar: bool
+        :param upper_narity_limit:
+            The upper limit for the n-arity of the composition.
+            If None, no limit is set.
+            Defaults to None.
+        :type upper_narity_limit: Optional[int]
 
         :return:
             The list of ValidAtoms instances.
@@ -134,15 +168,20 @@ class ValidAtoms(object):
             # No parallelization necessary because this will be fast.
             valid_atoms = [ValidAtoms(atoms=a, volume_check_cutoff=volume_check_cutoff,
                                       structure_check_cutoff=structure_check_cutoff, use_pauling_test=use_pauling_test,
-                                      include_alloys=include_alloys, skip_validation=skip_validation) for a in atoms]
+                                      include_alloys=include_alloys, skip_validation=skip_validation,
+                                      upper_narity_limit=upper_narity_limit) for a in atoms]
         else:
             constructor = partial(ValidAtoms, volume_check_cutoff=volume_check_cutoff,
                                   structure_check_cutoff=structure_check_cutoff, use_pauling_test=use_pauling_test,
-                                  include_alloys=include_alloys, skip_validation=skip_validation)
+                                  include_alloys=include_alloys, skip_validation=skip_validation,
+                                  upper_narity_limit=upper_narity_limit)
             cpu_count = number_cpus if number_cpus is not None else os.cpu_count()
-            valid_atoms = process_map(constructor, atoms, desc=desc,
-                                      chunksize=max(min(len(atoms) // cpu_count, 100), 1),
-                                      max_workers=cpu_count)
+            if cpu_count > 1:
+                valid_atoms = process_map(constructor, atoms, desc=desc,
+                                          chunksize=max(min(len(atoms) // cpu_count, 100), 1),
+                                          max_workers=cpu_count, disable=not enable_progress_bar)
+            else:
+                valid_atoms = list(map(constructor, tqdm(atoms, desc=desc, disable=not enable_progress_bar)))
         return valid_atoms
 
     @staticmethod
@@ -174,9 +213,14 @@ class ValidAtoms(object):
             return True
 
     @staticmethod
-    def _smact_check(composition: Composition, use_pauling_test: bool = True, include_alloys: bool = True) -> bool:
+    def _smact_check(composition: Composition, use_pauling_test: bool = True, include_alloys: bool = True,
+                     upper_narity_limit: Optional[int] = None) -> bool:
         """
         Check the validity of the composition according to the SMACT rules.
+
+        Because the checking of the SMACT rules can be slow for compositions with a high n-arity, the upper limit for
+        the n-arity can be set. If the n-arity exceeds the upper limit, the composition is automatically considered
+        invalid.
 
         :param composition:
             The Composition instance to validate.
@@ -189,13 +233,20 @@ class ValidAtoms(object):
             Whether to include alloys in the composition check.
             Defaults to True.
         :type include_alloys: bool
+        :param upper_narity_limit:
+            The upper limit for the n-arity of the composition.
+            Compositions with a higher n-arity are automatically considered invalid.
+            If None, no limit is set.
+            Defaults to None.
+        :type upper_narity_limit: Optional[int]
 
         :return:
             Whether the composition is valid.
         :rtype: bool
         """
-        return smact.screening.smact_validity(composition, use_pauling_test=use_pauling_test,
-                                              include_alloys=include_alloys)
+        if upper_narity_limit is not None and len(composition) > upper_narity_limit:
+            return False
+        return smact_validity(composition, use_pauling_test=use_pauling_test, include_alloys=include_alloys)
 
     @staticmethod
     def _get_fingerprints(composition: Composition, structure: Structure) -> Tuple[List[float], List[float]]:

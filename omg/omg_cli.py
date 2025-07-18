@@ -12,7 +12,7 @@ class OMGCLI(LightningCLI):
         d = LightningCLI.subcommands()
         d["visualize"] = {"model", "datamodule"}
         d["match"] = {"model", "datamodule"}
-        d["curriculum"] = {"model", "datamodule"}
+        d["dng_eval"] = {"model", "datamodule"}
         d["fit_lattice"] = {"model", "datamodule"}
         return d
 

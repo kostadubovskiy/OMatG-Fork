@@ -1,6 +1,6 @@
 from ase.build import bulk
 import pytest
-from omg.analysis import match_rate_and_rmsd, unique_rate, ValidAtoms
+from omg.analysis import match_rmsds, ValidAtoms
 
 
 @pytest.fixture
@@ -24,34 +24,36 @@ def c4():
 
 
 def test_crystals_different(c1, c2, c3, c4):
-    assert match_rate_and_rmsd([c1], [c2])[0] == 0.0
-    assert match_rate_and_rmsd([c1], [c3])[0] == 0.0
-    assert match_rate_and_rmsd([c1], [c4])[0] == 0.0
-    assert match_rate_and_rmsd([c2], [c1])[0] == 0.0
-    assert match_rate_and_rmsd([c2], [c3])[0] == 0.0
-    assert match_rate_and_rmsd([c2], [c4])[0] == 0.0
-    assert match_rate_and_rmsd([c3], [c1])[0] == 0.0
-    assert match_rate_and_rmsd([c3], [c2])[0] == 0.0
-    assert match_rate_and_rmsd([c3], [c4])[0] == 0.0
+    assert sum(r is not None for r in match_rmsds([c1], [c2], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds([c1], [c3], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds([c1], [c4], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds([c2], [c1], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds([c2], [c3], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds([c2], [c4], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds([c3], [c1], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds([c3], [c2], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds([c3], [c4], enable_progress_bar=False)[0]) == 0
 
 
 def test_match_rate(c1, c2, c3, c4):
-    assert match_rate_and_rmsd([c1, c2, c3, c4], [c1, c2, c3, c4], ltol=0.2, stol=0.3, angle_tol=5.0)[0] == 1.0
-    assert match_rate_and_rmsd([c1, c2], [c3, c4], ltol=0.2, stol=0.3, angle_tol=5.0)[0] == 0.0
-    assert match_rate_and_rmsd([c1, c2, c3, c4], [c1, c1, c1, c1], ltol=0.2, stol=0.3, angle_tol=5.0)[0] == 1.0 / 4.0
-    assert match_rate_and_rmsd([c1, c2, c1, c1, c2, c3, c1, c4, c4, c2, c1, c3, c4, c2, c1, c2, c4],
-                               [c1, c2, c3, c4, c1, c2, c3, c4, c1, c2, c3, c4, c1, c2, c3, c4, c1], ltol=0.2, stol=0.3, angle_tol=5.0)[0] == 5.0 / 17.0
-    assert match_rate_and_rmsd([c1, c2, c1, c1, c2, c3, c1, c4, c4, c2, c1, c3, c4, c2, c1, c2, c4],
-                               [c1, c2, c1, c2, c1, c2, c1, c2, c1, c2, c1, c2, c1, c2, c1, c2, c1], ltol=0.2, stol=0.3, angle_tol=5.0)[0] == 9.0 / 17.0
-    assert match_rate_and_rmsd([c1, c2], [c1, c2, c1, c1, c2, c3, c1, c4, c4, c2, c1, c3, c4, c2, c1, c2, c4],
-                               ltol=0.2, stol=0.3, angle_tol=5.0)[0] == 1.0
-
-
-def test_unique_rate(c1, c2, c3, c4):
-    assert unique_rate([c1, c2, c3, c4], ltol=0.2, stol=0.3, angle_tol=5.0) == 1.0
-    assert unique_rate([c1, c1, c1, c1], ltol=0.2, stol=0.3, angle_tol=5.0) == 1.0 / 4.0
-    assert unique_rate([c1, c2, c1, c1, c2, c3, c1, c4, c4, c2, c1, c3, c4, c2, c1, c2, c4], ltol=0.2,
-                       stol=0.3, angle_tol=5.0) == 4.0 / 17.0
+    assert sum(r is not None for r in match_rmsds(
+        [c1, c2, c3, c4], [c1, c2, c3, c4], enable_progress_bar=False)[0]) == 4
+    assert sum(r is not None for r in match_rmsds(
+        [c1, c2], [c3, c4], enable_progress_bar=False)[0]) == 0
+    assert sum(r is not None for r in match_rmsds(
+        [c1, c2, c3, c4], [c1, c1, c1, c1], enable_progress_bar=False)[0]) == 1
+    assert sum(r is not None for r in match_rmsds(
+        [c1, c2, c1, c1, c2, c3, c1, c4, c4, c2, c1, c3, c4, c2, c1, c2, c4],
+        [c1, c2, c3, c4, c1, c2, c3, c4, c1, c2, c3, c4, c1, c2, c3, c4, c1],
+        enable_progress_bar=False)[0]) == 5
+    assert sum(r is not None for r in match_rmsds(
+        [c1, c2, c1, c1, c2, c3, c1, c4, c4, c2, c1, c3, c4, c2, c1, c2, c4],
+        [c1, c2, c1, c2, c1, c2, c1, c2, c1, c2, c1, c2, c1, c2, c1, c2, c1],
+        enable_progress_bar=False)[0]) == 9
+    assert sum(r is not None for r in match_rmsds(
+        [c1, c2],
+        [c1, c2, c1, c1, c2, c3, c1, c4, c4, c2, c1, c3, c4, c2, c1, c2, c4],
+        enable_progress_bar=False)[0]) == 2
 
 
 if __name__ == '__main__':

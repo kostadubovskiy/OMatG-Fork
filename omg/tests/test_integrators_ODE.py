@@ -3,6 +3,7 @@ from omg.si.single_stochastic_interpolant import SingleStochasticInterpolant
 from omg.si.interpolants import *
 from omg.si.gamma import *
 from omg.si.epsilon import *
+from omg.si.tau import TauConstantSchedule
 from omg.globals import SMALL_TIME, BIG_TIME
 
 # Testing parameters/objects
@@ -18,8 +19,8 @@ interpolants = [
     PeriodicLinearInterpolant(),
     EncoderDecoderInterpolant(),
     MirrorInterpolant(),
-    ScoreBasedDiffusionModelInterpolant(),
-    PeriodicScoreBasedDiffusionModelInterpolant(),
+    ScoreBasedDiffusionModelInterpolantVP(tau=TauConstantSchedule()),
+    PeriodicScoreBasedDiffusionModelInterpolantVP(tau=TauConstantSchedule()),
     PeriodicTrigonometricInterpolant(),
     PeriodicEncoderDecoderInterpolant(),
 ]
@@ -53,7 +54,7 @@ def test_ode_integrator(interpolant, gamma):
     if isinstance(interpolant, MirrorInterpolant):
         x_init = x_final.clone()
 
-    if isinstance(interpolant, (PeriodicLinearInterpolant, PeriodicScoreBasedDiffusionModelInterpolant,
+    if isinstance(interpolant, (PeriodicLinearInterpolant, PeriodicScoreBasedDiffusionModelInterpolantVP,
                                 PeriodicTrigonometricInterpolant, PeriodicEncoderDecoderInterpolant)):
         pbc_flag = True
         interpolant_geodesic = SingleStochasticInterpolant(

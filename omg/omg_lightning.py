@@ -3,9 +3,11 @@ from pathlib import Path
 import time
 from typing import Dict, Optional, Sequence
 from ase import Atoms
-import lightning as L
+import lightning
+import numpy as np
+from scipy.stats import wasserstein_distance
 import torch
-from omg.analysis import match_rate_and_rmsd, ValidAtoms
+from omg.analysis import get_coordination_numbers, get_cov, match_rmsds, ValidAtoms
 from omg.datamodule import OMGData
 from omg.globals import SMALL_TIME, BIG_TIME
 from omg.model.model import Model
@@ -16,8 +18,7 @@ from omg.si.stochastic_interpolants import StochasticInterpolants
 from omg.utils import xyz_saver
 
 
-
-class OMGLightning(L.LightningModule):
+class OMGLightning(lightning.LightningModule):
     """
     Main module which is fit and used to generate structures using Lightning CLI.
     """
@@ -35,15 +36,19 @@ class OMGLightning(L.LightningModule):
         """
         Match rate for the CSP task.
         """
+        DNG_EVAL = auto()
+        """
+        Evaluation for the DNG task.
+        """
 
     def __init__(self, si: StochasticInterpolants, sampler: Sampler, model: Model,
-                 relative_si_costs: Dict[str, float], learning_rate: float = 0.001, use_min_perm_dist: bool = False,
+                 relative_si_costs: Dict[str, float], use_min_perm_dist: bool = False,
                  generation_xyz_filename: Optional[str] = None, sobol_time: bool = False,
-                 float_32_matmul_precision: str = "medium", validation_mode: str = "loss") -> None:
+                 float_32_matmul_precision: str = "medium", validation_mode: str = "loss",
+                 dataset_name: str = "mp_20", number_cpus: int = 12) -> None:
         super().__init__()
         self.si = si
         self.sampler = sampler
-        self.lr = learning_rate  # Learning rate must be stored in this class for learning rate finder.
         self.use_min_perm_dist = use_min_perm_dist
         if self.use_min_perm_dist:
             self._pos_corrector = self.si.get_stochastic_interpolant("pos").get_corrector()
@@ -85,12 +90,18 @@ class OMGLightning(L.LightningModule):
             self._validation_metric = self.ValidationMetric[validation_mode.upper()]
         except AttributeError:
             raise ValueError(f"Unknown validation metric f{validation_mode}.")
-        self.matches = 0
-        self.rmsd = 0
-        self.counts = 0
+        self.dataset_name = dataset_name
+        if not self.dataset_name in ["mp_20", "carbon_24", "perov_5", "mpts_52", "alex_mp_20"]:
+            raise ValueError(f"Dataset {self.dataset_name} not supported.")
+        self.number_cpus = number_cpus
+        if not self.number_cpus >= 1:
+            raise ValueError(f"Number of CPUs {self.number_cpus} must be >= 1.")
 
         # Possible values are "medium", "high", and "highest".
         torch.set_float32_matmul_precision(float_32_matmul_precision)
+
+        self.reference_atoms = []
+        self.generated_atoms = []
 
     def forward(self, x_t: Sequence[torch.Tensor], t: torch.Tensor) -> Sequence[Sequence[torch.Tensor]]:
         """
@@ -111,15 +122,6 @@ class OMGLightning(L.LightningModule):
         x = self.model(x_t, t)
         return x
 
-    def on_fit_start(self) -> None:
-        """
-        Set the learning rate of the optimizers to the learning rate of this class.
-        """
-        for optimizer in self.trainer.optimizers:
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = self.lr
-
-    # TODO: specify argument types
     def training_step(self, x_1: OMGData) -> torch.Tensor:
         """
         Performs one training step given a batch of x_1
@@ -160,44 +162,36 @@ class OMGLightning(L.LightningModule):
 
         return total_loss
 
+    def on_validation_epoch_start(self):
+        self.reference_atoms = []
+        self.generated_atoms = []
+
     def validation_step(self, x_1: OMGData) -> torch.Tensor:
         batch_size = len(x_1.n_atoms)
         x_0 = self.sampler.sample_p_0(x_1).to(self.device)
 
-        if self._validation_metric == self.ValidationMetric.MATCH_RATE:
-            gen = self.si.integrate(x_0, self.model, save_intermediate=False)
-            gen.to('cpu')
+        if (self._validation_metric == self.ValidationMetric.MATCH_RATE
+                or self._validation_metric == self.ValidationMetric.DNG_EVAL):
             # Prevent moving x_1 to cpu because it's needed below.
             x_1_cpu = x_1.clone().to('cpu')
-            x_1_atoms = []
-            gen_atoms = []
-            assert torch.equal(gen.n_atoms, x_1_cpu.n_atoms)
-            assert torch.equal(gen.ptr, x_1_cpu.ptr)
-            assert torch.equal(gen.species, x_1_cpu.species)
             for i in range(batch_size):
                 lower, upper = x_1_cpu.ptr[i], x_1_cpu.ptr[i + 1]
-                x_1_atoms.append(Atoms(numbers=x_1_cpu.species[lower:upper],
-                                       scaled_positions=x_1_cpu.pos[lower:upper, :],
-                                       cell=x_1_cpu.cell[i, :, :], pbc=(1, 1, 1)))
-                gen_atoms.append(Atoms(numbers=gen.species[lower:upper], scaled_positions=gen.pos[lower:upper, :],
-                                       cell=gen.cell[i, :, :], pbc=(1, 1, 1)))
-            gen_valid_atoms = ValidAtoms.get_valid_atoms(gen_atoms, desc="Validating generated structures",
-                                                         skip_validation=True, number_cpus=1)
-            ref_valid_atoms = ValidAtoms.get_valid_atoms(x_1_atoms, desc="Validating reference structures",
-                                                         skip_validation=True, number_cpus=1)
+                self.reference_atoms.append(
+                    Atoms(numbers=x_1_cpu.species[lower:upper], scaled_positions=x_1_cpu.pos[lower:upper, :],
+                          cell=x_1_cpu.cell[i, :, :], pbc=(1, 1, 1)))
 
-            match1, rmsd1, _, _ = match_rate_and_rmsd(gen_valid_atoms, ref_valid_atoms, ltol=0.3, stol=0.5,
-                                                      angle_tol=10.0, number_cpus=1)
-
-            self.matches += match1 * batch_size
-            self.rmsd += rmsd1 * batch_size
-            self.counts += batch_size
-            gen_losses = {
-                "matches": match1 * batch_size,
-                "total_rmsd": rmsd1 * batch_size,
-            }
+            gen = self.si.integrate(x_0, self.model, save_intermediate=False)
+            gen.to('cpu')
+            assert len(gen.n_atoms) == batch_size
+            assert torch.equal(gen.n_atoms, x_1_cpu.n_atoms)
+            assert torch.equal(gen.ptr, x_1_cpu.ptr)
+            for i in range(batch_size):
+                lower, upper = gen.ptr[i], gen.ptr[i + 1]
+                self.generated_atoms.append(
+                    Atoms(numbers=gen.species[lower:upper], scaled_positions=gen.pos[lower:upper, :],
+                          cell=gen.cell[i, :, :], pbc=(1, 1, 1)))
         else:
-            gen_losses = {}
+            assert self._validation_metric == self.ValidationMetric.LOSS
 
         # Minimize permutational distance between clusters. Should be done after integrating.
         if self.use_min_perm_dist:
@@ -221,7 +215,7 @@ class OMGLightning(L.LightningModule):
         losses["val_loss_total"] = total_loss
 
         self.log_dict(
-            losses | gen_losses,
+            losses,
             on_step=False,
             on_epoch=True,
             prog_bar=True,
@@ -231,17 +225,77 @@ class OMGLightning(L.LightningModule):
 
         return total_loss
 
-    def on_validation_epoch_start(self):
-        self.matches = 0
-        self.rmsd = 0
-        self.counts = 0
-
     def on_validation_epoch_end(self):
         if self._validation_metric == self.ValidationMetric.MATCH_RATE:
-            self.log("match_rate", self.matches / self.counts, sync_dist=True)
-            self.log("mean_rmsd", self.rmsd / self.counts, sync_dist=True)
+            assert len(self.generated_atoms) == len(self.reference_atoms)
+            gen_valid_atoms = ValidAtoms.get_valid_atoms(self.generated_atoms, desc="Validating generated structures",
+                                                         skip_validation=True, number_cpus=1)
+            ref_valid_atoms = ValidAtoms.get_valid_atoms(self.reference_atoms, desc="Validating reference structures",
+                                                         skip_validation=True, number_cpus=1)
 
-    # TODO: what do we want to return
+            rmsds, valid_rmsds = match_rmsds(gen_valid_atoms, ref_valid_atoms, ltol=0.3, stol=0.5, angle_tol=10.0,
+                                             number_cpus=self.number_cpus, enable_progress_bar=True)
+            match_count = sum(rmsd is not None for rmsd in rmsds)
+            match_rate = match_count / len(gen_valid_atoms)
+            filtered_rmsds = [rmsd for rmsd in rmsds if rmsd is not None]
+            mean_rmsd = np.mean(filtered_rmsds)
+
+            self.log("match_rate", match_rate, sync_dist=True)
+            self.log("mean_rmsd", float(mean_rmsd), sync_dist=True)
+        elif self._validation_metric == self.ValidationMetric.DNG_EVAL:
+            assert len(self.generated_atoms) == len(self.reference_atoms)
+            gen_valid_atoms = ValidAtoms.get_valid_atoms(self.generated_atoms, desc="Validating generated structures",
+                                                         number_cpus=self.number_cpus)
+            ref_valid_atoms = ValidAtoms.get_valid_atoms(self.reference_atoms, desc="Validating reference structures",
+                                                         number_cpus=self.number_cpus)
+            valid_rate = sum(va.valid for va in gen_valid_atoms) / len(gen_valid_atoms)
+
+            gen_densities = [struc.structure.density for struc in gen_valid_atoms]
+            ref_densities = [struc.structure.density for struc in ref_valid_atoms]
+            wdist_density = wasserstein_distance(gen_densities, ref_densities)
+            gen_narity = [len(set(struc.structure.species)) for struc in gen_valid_atoms]
+            ref_narity = [len(set(struc.structure.species)) for struc in ref_valid_atoms]
+            wdist_narity = wasserstein_distance(gen_narity, ref_narity)
+            gen_coordination_numbers = [np.mean(get_coordination_numbers(struc.atoms)) for struc in gen_valid_atoms]
+            ref_coordination_numbers = [np.mean(get_coordination_numbers(struc.atoms)) for struc in ref_valid_atoms]
+            wdist_coordination_numbers = wasserstein_distance(gen_coordination_numbers, ref_coordination_numbers)
+            wdist_avg = np.average([wdist_density, wdist_narity, wdist_coordination_numbers])
+
+            if self.dataset_name in ("mp_20", "carbon_24", "perov_5"):
+                # Taken from https://github.com/jiaor17/DiffCSP/blob/7121d159826efa2ba9500bf299250d96da37f146/scripts/compute_metrics.py
+                COV_Cutoffs = {
+                    "mp_20": {"struc": 0.4, "comp": 10.0},
+                    "carbon_24": {"struc": 0.2, "comp": 4.0},
+                    "perov_5": {"struc": 0.2, "comp": 4}
+                }
+                struc_cutoff = COV_Cutoffs[self.dataset_name]["struc"]
+                comp_cutoff = COV_Cutoffs[self.dataset_name]["comp"]
+                cov_precision, cov_recall = get_cov(gen_valid_atoms, ref_valid_atoms, struc_cutoff, comp_cutoff, None)
+                cov_avg = np.average([1.0 - cov_precision, 1.0 - cov_recall])
+                metrics = {
+                    "valid_rate": valid_rate,
+                    "wdist_density": wdist_density,
+                    "wdist_narity": wdist_narity,
+                    "wdist_coordination_numbers": wdist_coordination_numbers,
+                    "cov_precision": cov_precision,
+                    "cov_recall": cov_recall,
+                }
+                dng_eval = float(np.average([cov_avg, wdist_avg, 1.0 - valid_rate]))
+            else:
+                assert self.dataset_name in ["mpts_52", "alex_mp_20"]
+                metrics = {
+                    "valid_rate": valid_rate,
+                    "wdist_density": wdist_density,
+                    "wdist_narity": wdist_narity,
+                    "wdist_coordination_numbers": wdist_coordination_numbers,
+                }
+                dng_eval = float(np.average([wdist_avg, 1.0 - valid_rate]))
+
+            self.log("dng_eval", dng_eval, sync_dist=True)
+            self.log_dict(metrics, sync_dist=True)
+        else:
+            assert self._validation_metric == self.ValidationMetric.LOSS
+
     def predict_step(self, x: OMGData) -> OMGData:
         """
         Performs generation
