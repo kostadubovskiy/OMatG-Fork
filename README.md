@@ -87,13 +87,12 @@ $b^\theta(t, x)$ for both ODE- and SDE-based sampling can be learned from data b
 
 The flexibility of the SI framework stems from the 
 ability to tailor the choice of interpolants and choosing between deterministic (ODE) and stochastic (SDE) sampling 
-schemes (see Fig. 1). 
+schemes (see Fig. 1 that visualizes the tunable components of the SI framework for bridging samples from a 
+base distribution (gray particles) to samples from a target distribution (purple particles); figure taken from the 
+<a href="https://openreview.net/forum?id=gHGrzxFujU">OMatG paper</a>.). 
 
 <figure>
     <img src="https://arxiv.org/html/2502.02582v1/x1.png" alt="stochastic interpolants" width="400">
-    <figcaption><i>Figure 1.</i> Visualization of the tunable components of the SI framework for bridging samples from a 
-    base distribution (gray particles) to samples from a target distribution (purple particles). Figure taken from the 
-    <a href="https://openreview.net/forum?id=gHGrzxFujU">OMatG paper</a>.</figcaption>
 </figure>
 
 OMatG defines a crystalline material of $N$ atoms by its unit cell that is described by three lattice vectors 
