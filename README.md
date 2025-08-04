@@ -366,7 +366,7 @@ Installing the `omg` package as described above provides the `omg` command for t
 For convenience, we include several material datasets that can be used for training. They can be found in the 
 [```omg/data```](omg/data) directory and are described briefly below:
 
-- *MP-20*: 45,231 structures from the [Materials Project](https://pubs.aip.org/aip/apm/article/1/1/011002/119685/Commentary-The-Materials-Project-A-materials) with a maximum of 20 atoms per structure.
+- *MP-20*: 45,229 structures from the [Materials Project](https://pubs.aip.org/aip/apm/article/1/1/011002/119685/Commentary-The-Materials-Project-A-materials) with a maximum of 20 atoms per structure.
 - *MPTS-52*: [Chronological data split of the Materials Project](https://joss.theoj.org/papers/10.21105/joss.05618) with 40,476 structures and up to 52 atoms per 
   structure.
 - *Perov-5*: A [perovskite dataset](https://pubs.rsc.org/en/content/articlelanding/2012/ee/c2ee22341d) containing 18,928 structures each with five atoms per structure.
