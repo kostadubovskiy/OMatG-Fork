@@ -21,7 +21,7 @@ on [arXiv](https://arxiv.org/abs/2502.02582)) which should be [cited](#citing-om
 
 #### *De novo* generation of Pd<sub>3</sub>Te<sub>2</sub>I<sub>3</sub>:
 
-<img src="assets/dng_movie.gif" alt="dng movie" width="50%">
+<img src="assets/dng_movie.gif" alt="dng movie" width="60%">
 
 ## Table of Contents
 
