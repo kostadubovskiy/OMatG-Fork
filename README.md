@@ -346,12 +346,11 @@ The `model` section specifies the model architecture. In the above example, we j
 ## Installation
 
 Install the dependencies (see [pyproject.toml](pyproject.toml)) and the `omg` package itself by running 
-`pip install .` within the base directory of this repository. You can use any Python version between 3.10 and 3.13. 
-If the code in this repository changes, this command has to be executed again to also change the code of the installed 
-package.
+`pip install .` or `pip install -e .` for editable mode (recommended for developers) within the base directory 
+of this repository. You can use any Python version between 3.10 and 3.13. 
 
-To install `omg` in editable mode (recommended for developers), use `pip install -e .` within the base directory of 
-this repository once. Any changes in code are directly available in the installed `omg` package. 
+If the code in this repository changes, for standard installation the command has to be executed again to also 
+change the code of the installed package; for editable mode any changes in code are directly available in the installed omg package.
 
 > **NOTE**: Installing PyTorch 2.7 based on the correct compute platform as described on the 
 > [PyTorch webpage](https://pytorch.org/get-started/locally/) before installing `omatg` can help minimize sources of 
@@ -366,7 +365,7 @@ Installing the `omg` package as described above provides the `omg` command for t
 For convenience, we include several material datasets that can be used for training. They can be found in the 
 [```omg/data```](omg/data) directory and are described briefly below:
 
-- *MP-20*: 45,231 structures from the [Materials Project](https://pubs.aip.org/aip/apm/article/1/1/011002/119685/Commentary-The-Materials-Project-A-materials) with a maximum of 20 atoms per structure.
+- *MP-20*: 45,229 structures from the [Materials Project](https://pubs.aip.org/aip/apm/article/1/1/011002/119685/Commentary-The-Materials-Project-A-materials) with a maximum of 20 atoms per structure.
 - *MPTS-52*: [Chronological data split of the Materials Project](https://joss.theoj.org/papers/10.21105/joss.05618) with 40,476 structures and up to 52 atoms per 
   structure.
 - *Perov-5*: A [perovskite dataset](https://pubs.rsc.org/en/content/articlelanding/2012/ee/c2ee22341d) containing 18,928 structures each with five atoms per structure.
