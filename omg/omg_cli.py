@@ -4,11 +4,16 @@ from lightning.pytorch.cli import LightningArgumentParser, LightningCLI
 
 class OMGCLI(LightningCLI):
     """
-    Command line interface for Open Materials Generation (OMatG).
+    Command line interface for the omg package.
 
-    Extends the LightningCLI class to add subcommands and argument linking specific to OMatG.
+    Extends the LightningCLI class to add subcommands and argument linking specific to omg.
 
     Any initialization args and kwargs are passed down to the LightningCLI constructor.
+
+    :param args:
+        Positional arguments to pass to the LightningCLI constructor.
+    :param kwargs:
+        Keyword arguments to pass to the LightningCLI constructor.
     """
 
     def __init__(self, *args, **kwargs) -> None:

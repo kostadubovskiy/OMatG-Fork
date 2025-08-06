@@ -26,16 +26,56 @@ from omg.analysis import (get_coordination_numbers, get_coordination_numbers_spe
 
 
 class OMGTrainer(Trainer):
-    def __init__(self, *args, **kwargs):
+    """
+    Trainer for the omg models.
+
+    Extends the PyTorch Lightning Trainer class to provide additional subcommands.
+
+    Any initialization args and kwargs are passed down to the PyTorch Lightning Trainer constructor.
+
+    :param args:
+        Positional arguments to pass to the PyTorch Lightning Trainer constructor.
+    :param kwargs:
+        Keyword arguments to pass to the PyTorch Lightning Trainer constructor.
+    """
+    def __init__(self, *args, **kwargs) -> None:
+        """Constructor of the OMGTrainer class."""
         super().__init__(*args, **kwargs)
 
     def visualize(self, model: OMGLightning, datamodule: OMGDataModule, xyz_file: str,
                   plot_name: str = "viz.pdf", skip_init: bool = False) -> None:
         """
+        Plot and compare distributions over the prediction and generated dataset.
+
+        This method plots and compares the following distributions:
+        - Atomic numbers.
+        - Volumes.
+        - Number of atoms per structure.
+        - Number of unique elements per structure.
+        - Average coordination numbers.
+        - Average coordination numbers per species.
+        - Space group numbers.
+        - Crystal systems.
+        - Root-mean-square distances between the fractional coordinates in the initial structures and the final
+          generated structures (only if skip_init=False).
+
+        The space group number and crystal system of the generated structures are determined with and without variable
+        precision (varprec). Furthermore, the symmetrized structures are written (together with the original
+        unsymmetrized structures for direct comparison) to an XYZ file with the same stem as the final generated
+        structures, but with "_symmetric" appended to the stem of the filename.
+
         Compare the distributions of the volume, the element composition, and the number of unique elements per
-        structure in the test and generated dataset. Also, plot the root mean-square distance between the fractional
+        structure in the test and generated dataset. Also, plot the root-mean-square distance between the fractional
         coordinates in the initial structures (sampled from rho_0) and the final generated structures (generated from
         rho_1).
+
+        The generated structures are read from an XYZ file. The initial structures are assumed to be stored in an XYZ
+        file with the same name as the final generated structures, but with "_init" appended to the stem of the
+        filename. If the skip_init flag is set to True, the initial structures are not read and only distributions for
+        the final generated structures are visualized.
+
+        Also, plot the root-mean-square distance between the
+        fractional coordinates in the initial structures and the final generated structures.
 
         :param model:
             OMG model (argument required and automatically passed by lightning CLI).
@@ -78,6 +118,20 @@ class OMGTrainer(Trainer):
     def _load_dataset_atoms(dataset: OMGTorchDataset, fractional: bool = True) -> list[Atoms]:
         """
         Load lmdb file atoms into a list of Atoms instances.
+
+        :param dataset:
+            Dataset to load atoms from.
+        :type dataset: OMGTorchDataset
+        :param fractional:
+            Whether the positions in the dataset are fractional coordinates.
+            If True, the positions are interpreted as fractional coordinates.
+            If False, the positions are interpreted as Cartesian coordinates.
+            Defaults to True.
+        :type fractional: bool
+
+        :return:
+            List of Atoms instances.
+        :rtype: list[Atoms]
         """
         all_ref_atoms = []
         for struc in tqdm.tqdm(dataset, desc="Loading test dataset"):
@@ -94,28 +148,30 @@ class OMGTrainer(Trainer):
         return all_ref_atoms
 
     @staticmethod
-    def _plot_to_pdf(reference: Sequence[Atoms], initial: Sequence[Atoms], generated: Sequence[Atoms], plot_name: str,
-                     use_min_perm_dist: bool, symmetry_filename: Path) -> None:
+    def _plot_to_pdf(reference: Sequence[Atoms], initial: Optional[Sequence[Atoms]], generated: Sequence[Atoms],
+                     plot_name: str, use_min_perm_dist: bool, symmetry_filename: Path) -> None:
         """
-        Plot figures for data analysis/matching between test and generated data.
+        Helper plotting method for the `visualize` method of the OMGTrainer class.
+
+        See the `visualize` method for a description of the plots.
 
         :param reference:
             Reference test structures.
-        :type reference: List[Atoms]
+        :type reference: Sequence[Atoms]
         :param initial:
-            Initial structures.
-        :type initial: List[Atoms]
+            Initial structures or None.
+        :type initial: Optional[Sequence[Atoms]]
         :param generated:
             Generated structures.
-        :type generated: List[Atoms]
+        :type generated: Sequence[Atoms]
         :param plot_name:
             Filename for the plots.
         :type plot_name: str
         :param use_min_perm_dist:
-            Whether to use the minimum permutation distance.
+            Whether the minimum permutation distance coupling was used during training.
         :type use_min_perm_dist: bool
         :param symmetry_filename:
-            Filename for the symmetric structures.
+            Filename for the storage of the symmetric structures.
         :type symmetry_filename: Path
         """
         fractional_coordinates_corrector = PeriodicBoundaryConditionsCorrector(min_value=0.0, max_value=1.0)
@@ -571,12 +627,9 @@ class OMGTrainer(Trainer):
                     skip_match: bool = False, ltol: float = 0.3, stol: float = 0.5, angle_tol: float = 10.0,
                     number_cpus: Optional[int] = None, upper_narity_limit: Optional[int] = None,
                     xyz_file_prediction_data: Optional[str] = None, check_reduced: bool = True,
-                    result_name: str = "match.json", plot_name: str = "rmsds.pdf") -> None:
+                    result_name: str = "csp_metrics.json", plot_name: str = "rmsds.pdf") -> None:
         """
-        Compute the match rate between the generated structures and the structures in the prediction dataset.
-
-        The match rate is one of the benchmarks for the crystal-structure prediction task used by CDVAE, DiffCSP, and
-        FlowMM.
+        Compute the crystal-structure prediction metrics for the generated structures.
 
         By default, this method first validates the generated structures and the structures in the prediction dataset
         based on volume, structure, composition, and fingerprint checks (see ValidAtoms class), and calculates the match
@@ -590,6 +643,9 @@ class OMGTrainer(Trainer):
         DiffCSP, and FlowMM.
 
         This method also plots the histogram of the root-mean-square distances between the matched structures.
+
+        The match rate and the average root-mean-square distance is one of the benchmarks for the crystal-structure
+        prediction task used by CDVAE, DiffCSP, and FlowMM.
 
         :param model:
             OMG model (argument required and automatically passed by lightning CLI).
@@ -755,19 +811,22 @@ class OMGTrainer(Trainer):
             plt.close()
 
     def dng_metrics(self, model: OMGLightning, datamodule: OMGDataModule, xyz_file: str,
-                    dataset_name: str, number_cpus: Optional[int] = None,
+                    dataset_name: Optional[str] = None, number_cpus: Optional[int] = None,
                     xyz_file_prediction_data: Optional[str] = None, result_name: str = "dng_metrics.json") -> None:
         """
         Compute the de-novo generation metrics for the generated structures.
 
-        The metrics include
+        The metrics include validity (structural and compositional) and Wasserstein distances between distributions of
+        density, volume fraction, number of atoms, number of unique elements, and average coordination number.
 
+        In addition, if `dataset_name` is set to `mp_20`, `carbon_24`, or `perov_5`, the metrics include coverage recall
+        and  precision.
 
-                    metrics: Sequence[str] = ('cov_precision', 'cov_recall',
-                                              'wdist_density', 'wdist_vol_frac', 'wdist_N', 'wdist_Nary', 'wdist_CN',
-                                              'validity_rate', 'valid_struc', 'valid_comp'),
+        The computed metrics are part of the benchmarks for the de-novo generation task used by CDVAE, DiffCSP, and
+        FlowMM.
 
-        Validity rate, coverage, and property distributions are computed.
+        Note that stability related metrics can be computed, for example, with the MatterGen codebase (see
+        https://github.com/microsoft/mattergen).
 
         :param model:
             OMG model (argument required and automatically passed by lightning CLI).
@@ -779,14 +838,14 @@ class OMGTrainer(Trainer):
             This argument has to be set on the command line.
         :type xyz_file: str
         :param dataset_name:
-            Name of the dataset used for the prediction data structures.
+            Name of the dataset used for training.
             This is used to set the cutoffs for the coverage metrics.
             Coverage metrics are only computed for the datasets "mp_20", "carbon_24", and "perov_5".
             If None, no coverage metrics are computed.
             Defaults to None.
             This argument can be optionally set on the command line.
         :param number_cpus:
-            Number of CPUs to use for multiprocessing. If None, use os.cpu_count().
+            Number of CPUs to use for multiprocessing during validation. If None, use os.cpu_count().
             Defaults to None.
             This argument can be optionally set on the command line.
         :type number_cpus: Optional[int]
