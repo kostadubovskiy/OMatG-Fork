@@ -1,17 +1,25 @@
 from enum import Enum, auto
 from pathlib import Path
-from typing import List, Sequence, Union
+from typing import Sequence, Union
 from ase import Atoms
 from ase.io import read, write
 import torch
 from torch_geometric.data import Data
 import numpy as np
+from omg.datamodule.dataloader import OMGData
 
 
 class DataField(Enum):
+    """
+    Enum for the different data fields in the omg.datamodule.dataloader.OMGData class relevant for stochastic
+    interpolants.
+    """
     pos = auto()
+    """Atomic positions."""
     cell = auto()
+    """Cell vectors."""
     species = auto()
+    """Atomic numbers."""
 
 
 def reshape_t(t: torch.Tensor, n_atoms: torch.Tensor, data_field: DataField) -> torch.Tensor:
@@ -52,9 +60,16 @@ def reshape_t(t: torch.Tensor, n_atoms: torch.Tensor, data_field: DataField) -> 
         return t_per_atom
 
 
-def xyz_saver(data: Union[Data, List[Data]], filename: Path) -> None:
+def xyz_saver(data: Union[OMGData, list[OMGData]], filename: Path) -> None:
     """
-    Takes data that has been generated and saves it as xyz file
+    Save structures from OMGData instances to an xyz file.
+
+    :param data:
+        OMGData or list of OMGData instances to save.
+    :type data: Union[OMGData, list[OMGData]]
+    :param filename:
+        Path to the xyz file where the structures will be saved.
+    :type filename: Path
     """
     if not filename.suffix == ".xyz":
         raise ValueError("The filename must have the suffix '.xyz'.")
@@ -70,9 +85,17 @@ def xyz_saver(data: Union[Data, List[Data]], filename: Path) -> None:
     write(filename, atoms, append=True)
 
 
-def xyz_reader(filename: Path) -> List[Atoms]:
+def xyz_reader(filename: Path) -> list[Atoms]:
     """
-    Reads an xyz file and returns a list of Atoms instances.
+    Read structures from an xyz file and return a list of Atoms instances.
+
+    :param filename:
+        Path to the xyz file to read.
+    :type filename: Path
+
+    :return:
+        List of Atoms instances read from the xyz file.
+    :rtype: list[Atoms]
     """
     if not filename.suffix == ".xyz":
         raise ValueError("The filename must have the suffix '.xyz'.")
@@ -83,7 +106,15 @@ def xyz_reader(filename: Path) -> List[Atoms]:
 
 def convert_ase_atoms_to_data(all_configs: Sequence[Atoms]) -> Data:
     """
-    Convert a list of ASE Atoms objects to a PyTorch Geometric Data object.
+    Convert a list of ASE Atoms objects to a PyTorch Geometric Data object similar to OMGData.
+
+    :param all_configs:
+        List of ASE Atoms objects to convert.
+    :type all_configs: Sequence[Atoms]
+
+    :return:
+        PyTorch Geometric Data object containing the batched configurations.
+    :rtype: Data
     """
     batch_size = len(all_configs)
     n_atoms = torch.tensor([len(config) for config in all_configs], dtype=torch.int64)
