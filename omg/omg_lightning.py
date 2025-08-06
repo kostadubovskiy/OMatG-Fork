@@ -1,7 +1,7 @@
 from enum import Enum, auto
 from pathlib import Path
 import time
-from typing import Dict, Optional, Sequence
+from typing import Dict, Optional
 from ase import Atoms
 import lightning
 import numpy as np
@@ -15,12 +15,101 @@ from omg.sampler.minimum_permutation_distance import correct_for_minimum_permuta
 from omg.sampler.sampler import Sampler
 from omg.si.abstracts import StochasticInterpolantSpecies
 from omg.si.stochastic_interpolants import StochasticInterpolants
+from omg.si.single_stochastic_interpolant_identity import SingleStochasticInterpolantIdentity
 from omg.utils import xyz_saver
 
 
 class OMGLightning(lightning.LightningModule):
     """
-    Main module which is fit and used to generate structures using Lightning CLI.
+    Lightning module of OMatG which defines the model and training logic.
+
+    This class contains the stochastic interpolants for the atomic positions ("pos" data field in
+    torch_geometric.data.Data instances), the cell vectors ("cell" data field), and the atomic numbers ("species" data
+    field) of the materials structures.
+
+    This class contains the base distribution for each data field by using a sampling method for each data
+    field of a sampler class.
+
+    The underlying model is trained to predict the stochastic interpolants for these data fields at a sampled time t,
+    which is sampled (uniformly or with a Sobol sequence) from the interval [SMALL_TIME, BIG_TIME]. During training,
+    the stochastic interpolants interpolate between a data sample and a sample from the base distribution. Optionally,
+    the sample from the base distribution can be permuted to minimize the fractional-coordinate distance between the
+    data sample and the sample from the base distribution.
+
+    The stochastic interpolants compute a set of losses that all have different loss keys. This class combines these
+    losses by weighting them with relative costs that are provided as a dictionary mapping the loss keys to the
+    relative costs. The sum of the relative costs must be 1.
+
+    This class allows for three different validation modes:
+    - "loss": Only the validation loss on the validation dataset is computed as the sum of the weighted losses and
+              logged as "val_loss_total".
+    - "match_rate": A structure is generated for each composition in the validation dataset, and the match rate and
+                    average root-mean-square distance between matched structures are logged. This validation mode
+                    requires that the stochastic interpolant for the species keeps them unchanged so that the model
+                    works in crystal-structure prediction mode. This validation mode is slow so it should not be run on
+                    every epoch.
+    - "dng_eval": A structure is generated for each number of atoms in the validation dataset, and the de-novo
+                  generation metrics are logged. Additionally, an averaged metric is logged as "dng_eval". This
+                  validation mode is slow so it should not be run on every epoch.
+
+    :param si:
+        Collection of stochastic interpolants used for training and generation/prediction.
+    :type si: StochasticInterpolants
+    :param sampler:
+        Sampler used to sample initial structures from the base distribution based on data samples.
+    :type sampler: Sampler
+    :param model:
+        Model architecture used for training and generation/prediction.
+    :type model: Model
+    :param relative_si_costs:
+        Relative costs for the stochastic interpolants used in the loss function.
+    :type relative_si_costs: Dict[str, float]
+    :param use_min_perm_dist:
+        Whether to use the minimum permutation distance coupling during training.
+        Defaults to False.
+    :type use_min_perm_dist: bool
+    :param generation_xyz_filename:
+        If not None, the filename to which the generated structures will be saved in XYZ format during prediction.
+        If None, the filename will be generated based on the current time.
+        Defaults to None.
+    :type generation_xyz_filename: Optional[str]
+    :param sobol_time:
+        Whether to use Sobol sampling for the time variable t.
+        If False, uniform sampling is used.
+        Defaults to False.
+    :type sobol_time: bool
+    :param float_32_matmul_precision:
+        Precision for float32 matrix multiplication in torch (see
+        https://docs.pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html).
+        Possible values are "medium", "high", and "highest".
+        Defaults to "medium".
+    :type float_32_matmul_precision: str
+    :param validation_mode:
+        The mode for validation metrics. Possible values are "loss", "match_rate", and "dng_eval".
+        Defaults to "loss".
+    :type validation_mode: str
+    :param dataset_name:
+        The name of the dataset used for training and validation.
+        This is only relevant if validation_mode is "dng_eval".
+        Possible values are "mp_20", "carbon_24", "perov_5", "mpts_52", and "alex_mp_20".
+        Defaults to "mp_20".
+    :type dataset_name: str
+    :param number_cpus:
+        The number of CPUs to use for parallel processing during validation and matching.
+        This is only relevant if validation_mode is "match_rate" or "dng_eval".
+        Defaults to 12.
+    :type number_cpus: int
+
+    :raises ValueError:
+        If the interpolant for the species is not of type StochasticInterpolantSpecies.
+        If the relative costs do not sum to 1.
+        If any cost is negative.
+        If the relative costs do not contain all loss keys from the stochastic interpolants or vice versa.
+        If the validation mode is not one of "loss", "match_rate", or "dng_eval".
+        If the species stochastic interpolant is not of type SingleStochasticInterpolantIdentity when
+        validation_mode is "match_rate".
+        If the dataset_name is not one of "mp_20", "carbon_24", "perov_5", "mpts_52", or "alex_mp_20".
+        If the number of CPUs is less than 1.
     """
 
     class ValidationMetric(Enum):
@@ -46,6 +135,7 @@ class OMGLightning(lightning.LightningModule):
                  generation_xyz_filename: Optional[str] = None, sobol_time: bool = False,
                  float_32_matmul_precision: str = "medium", validation_mode: str = "loss",
                  dataset_name: str = "mp_20", number_cpus: int = 12) -> None:
+        """Constructor of the OMGLightning class."""
         super().__init__()
         self.si = si
         self.sampler = sampler
@@ -90,6 +180,10 @@ class OMGLightning(lightning.LightningModule):
             self._validation_metric = self.ValidationMetric[validation_mode.upper()]
         except AttributeError:
             raise ValueError(f"Unknown validation metric f{validation_mode}.")
+        if self._validation_metric == self.ValidationMetric.MATCH_RATE:
+            if not isinstance(species_stochastic_interpolant, SingleStochasticInterpolantIdentity):
+                raise ValueError("Species stochastic interpolant must be of type SingleStochasticInterpolantIdentity "
+                                 "for match rate validation.")
         self.dataset_name = dataset_name
         if not self.dataset_name in ["mp_20", "carbon_24", "perov_5", "mpts_52", "alex_mp_20"]:
             raise ValueError(f"Dataset {self.dataset_name} not supported.")
@@ -103,31 +197,18 @@ class OMGLightning(lightning.LightningModule):
         self.reference_atoms = []
         self.generated_atoms = []
 
-    def forward(self, x_t: Sequence[torch.Tensor], t: torch.Tensor) -> Sequence[Sequence[torch.Tensor]]:
-        """
-        Calls encoder + head stack
-
-        :param x_t:
-            Sequence of torch.tensors corresponding to batched species, fractional coordinates and lattices.
-        :type x_t: Sequence[torch.Tensor]
-
-        :param t:
-            Sampled times
-        :type t: torch.Tensor
-
-        :return:
-            Predicted b and etas for species, coordinates and lattices, respectively.
-        :rtype: Sequence[Sequence[torch.Tensor]]
-        """
-        x = self.model(x_t, t)
-        return x
-
     def training_step(self, x_1: OMGData) -> torch.Tensor:
         """
-        Performs one training step given a batch of x_1
+        Performs one training step given a batch of structures x_1 from the training dataset.
+
+        This method samples the initial structures x_0 from the base distribution using the sampler, possibly
+        permutes the initial structures to minimize the permutational distance, samples times t for each structure,
+        computes the stochastic interpolants, and computes the losses based on the model predictions for the velocity
+        fields and denoisers at sampled times t. The total loss is computed as the weighted sum of the individual
+        losses using the provided relative costs.
 
         :return:
-            Loss from training step
+            Loss from training step.
         :rtype: torch.Tensor
         """
         x_0 = self.sampler.sample_p_0(x_1).to(self.device)
@@ -162,11 +243,37 @@ class OMGLightning(lightning.LightningModule):
 
         return total_loss
 
-    def on_validation_epoch_start(self):
+    def on_validation_epoch_start(self) -> None:
+        """
+        Called at the start of the validation epoch to reset the lists of reference and generated atoms.
+
+        These lists are used to store the reference structures from the validation dataset and the generated
+        structures during validation, which are later used for computing the match rate or de-novo generation
+        metrics at the end of the validation epoch.
+
+        This is only relevant if the validation metric is set to "match_rate" or "dng_eval".
+        """
         self.reference_atoms = []
         self.generated_atoms = []
 
     def validation_step(self, x_1: OMGData) -> torch.Tensor:
+        """
+        Performs one validation step given a batch of structures x_1 from the validation dataset.
+
+        This method samples the initial structures x_0 from the base distribution using the sampler, possibly
+        permutes the initial structures to minimize the permutational distance, samples times t for each
+        structure, computes the stochastic interpolants, and computes the losses based on the model predictions for the
+        velocity fields and denoisers at sampled times t. The total loss is computed as the weighted sum of the
+        individual losses using the provided relative costs.
+
+        If the validation metric is set to "match_rate" or "dng_eval", it also generates structures and stores them
+        in the `self.generated_atoms` list, and stores the reference structures from the validation dataset
+        in the `self.reference_atoms` list for later evaluation at the end of the validation epoch.
+
+        :param x_1:
+            Batch of structures from the validation dataset.
+        :type x_1: OMGData
+        """
         batch_size = len(x_1.n_atoms)
         x_0 = self.sampler.sample_p_0(x_1).to(self.device)
 
@@ -225,7 +332,18 @@ class OMGLightning(lightning.LightningModule):
 
         return total_loss
 
-    def on_validation_epoch_end(self):
+    def on_validation_epoch_end(self) -> None:
+        """
+        Called at the end of the validation epoch to compute and log the validation metrics.
+
+        This method computes the match rate or de-novo generation metrics based on the generated structures
+        and the reference structures from the validation dataset, depending on the validation metric set during
+        initialization. It logs the computed metrics, such as match rate, mean RMSD, valid rate, Wasserstein
+        distances for density, n-arity, and coordination numbers, and coverage (for mp_20, carbon_24, and perov_5
+        datasets), as well as the average of these metrics.
+
+        This is only relevant if the validation metric is set to "match_rate" or "dng_eval".
+        """
         if self._validation_metric == self.ValidationMetric.MATCH_RATE:
             assert len(self.generated_atoms) == len(self.reference_atoms)
             gen_valid_atoms = ValidAtoms.get_valid_atoms(self.generated_atoms, desc="Validating generated structures",
@@ -298,11 +416,23 @@ class OMGLightning(lightning.LightningModule):
 
     def predict_step(self, x: OMGData) -> OMGData:
         """
-        Performs generation
+        Performs one prediction step given a batch of structures x_1 from the prediction dataset.
+
+        This method samples the initial structures x_0 from the base distribution using the sampler, integrates
+        the stochastic interpolants to generate new structures, and saves the generated structures in XYZ format.
+        The initial structures are saved in a separate file with "_init" appended to the filename stem.
+        If the `generation_xyz_filename` is not set, the filename is generated based on the current time.
+
+        :param x:
+            Batch of structures from the prediction dataset.
+        :type x: OMGData
+
+        :return:
+            Generated structures after integrating the stochastic interpolants.
+        :rtype: OMGData
         """
         x_0 = self.sampler.sample_p_0(x).to(self.device)
         gen, inter = self.si.integrate(x_0, self.model, save_intermediate=True)
-        # probably want to turn structure back into some other object that's easier to work with
         filename = (Path(self.generation_xyz_filename) if self.generation_xyz_filename is not None
                     else Path(f"{time.strftime('%Y%m%d-%H%M%S')}.xyz"))
         init_filename = filename.with_stem(filename.stem + "_init")
