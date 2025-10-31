@@ -7,9 +7,12 @@ import warnings
 from ase import Atoms
 from ase.io import write
 from lightning.pytorch import Trainer
+import lmdb
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
+import pickle
+from pymatgen.core import Composition, Lattice, Structure
 from scipy.stats import lognorm, wasserstein_distance
 from sklearn.neighbors import KernelDensity
 import tqdm
@@ -992,3 +995,67 @@ class OMGTrainer(Trainer):
         assert loc_a == loc_b == loc_c == 0.0
         print("Standard deviations of the log of the distributions: ", shape_a, shape_b, shape_c)
         print("Means of the log of the distributions: ", log(scale_a), log(scale_b), log(scale_c))
+
+    def create_compositions(self, model: OMGLightning, datamodule: OMGDataModule, compositions: Sequence[str] | str,
+                            lmdb_file: str = "compositions.lmdb", repeats: int = 1) -> None:
+        """
+        Create an LMDB file containing dummy structures with the given compositions.
+
+        :param model:
+            OMG model (argument required and automatically passed by lightning CLI).
+        :type model: OMGLightning
+        :param datamodule:
+            OMG datamodule (argument required and automatically passed by lightning CLI).
+        :type datamodule: OMGDataModule
+        :param compositions:
+            List of compositions (as strings) to create dummy structures for.
+            This argument has to be set on the command line.
+        :type compositions: Sequence[str] | str
+        :param lmdb_file:
+            Name of the LMDB file to create.
+            This argument has to be set on the command line.
+        :type lmdb_file: str
+        :param repeats:
+            Number of times to repeat the given compositions.
+            This argument can be optionally set on the command line.
+            Defaults to 1.
+        :type repeats: int
+
+        :raises ValueError:
+            If repeats is less than 1.
+        :raises FileExistsError:
+            If the LMDB file already exists.
+        """
+        if repeats < 1:
+            raise ValueError("The number of repeats must be at least 1.")
+
+        lmdb_path = Path(lmdb_file)
+        if lmdb_path.exists():
+            raise FileExistsError(f"The LMDB file {lmdb_file} already exists.")
+
+        if isinstance(compositions, str):
+            compositions = [compositions]
+
+        structures = []
+        for comp in compositions:
+            pymatgen_composition = Composition(comp, strict=True)
+            species = sum(([element] * int(amount) for element, amount in pymatgen_composition.items()), start=[])
+            assert len(species) == pymatgen_composition.num_atoms
+            dummy_lattice = Lattice.cubic(3)  # Tom's favorite number.
+            dummy_fractional_coordinates = [(i / len(species), 0.0, 0.0) for i in range(len(species))]
+            dummy_structure = Structure(dummy_lattice, species, dummy_fractional_coordinates,
+                                        coords_are_cartesian=False)
+            structures.append(dummy_structure)
+        all_structures = sum((structures for _ in range(repeats)), start=[])
+
+        with (lmdb.Environment(str(lmdb_path), subdir=False, map_size=int(1e12), lock=False) as env,
+              env.begin(write=True) as txn):
+            for idx, struc in tqdm.tqdm(enumerate(all_structures), desc=f"Saving {len(all_structures)} structures to {lmdb_path}"):
+                data = {
+                    "pos": torch.from_numpy(struc.cart_coords),
+                    "cell": torch.from_numpy(np.array(struc.lattice.matrix)),
+                    "atomic_numbers": torch.from_numpy(np.array(struc.atomic_numbers, dtype=np.int32)),
+                    "ids": str(struc),
+                    "pbc": torch.tensor([1, 1, 1], dtype=torch.int32),
+                }
+                txn.put(str(idx).encode(), pickle.dumps(data))
