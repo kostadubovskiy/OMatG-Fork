@@ -426,13 +426,17 @@ omg create_compositions --config=<configuration_file.yaml> --compositions=<compo
 
 Here, `<compositions>` is a composition string that can be understood by 
 [PyMatgen's `Composition` class](https://pymatgen.org/pymatgen.core.html) (e.g., `--compositions='LiMn3O4'`) or a list 
-thereof (e.g., `--compositions='[LiMn3O4, GaTe]'`). The optional `repeats` command line argument can be used 
+thereof (e.g., `--compositions='[LiMn3O4, Ga4Te4]'`). The optional `repeats` command line argument can be used 
 to repeat each composition multiple times in the created lmdb file (e.g., for generating multiple structures per 
 composition). By default, each composition is only included once.
 
-The name of the created lmdb file is specified by `<lmdb_file>`. This lmdb file can then be used as the test dataset in 
-the configuration file for predicting structures with the desired compositions with the `omg predict` command above. 
-Here, one should use a checkpoint of a crystal-structure-prediction model whose training set includes the elements of the desired compositions.
+The name of the created lmdb file is specified by `<lmdb_file>`. This lmdb file can then be used as the prediction 
+dataset in the configuration file for predicting structures with the desired compositions with the `omg predict` command 
+above (it is also possible to overwrite the prediction dataset on the command line with the 
+`--data.predict_dataset.init_args.dataset.init_args.lmdb_paths=[<lmdb_file>]` argument).
+
+Importantly, one should use a checkpoint of a crystal-structure-prediction model whose training set includes the 
+elements of the desired compositions in the `omg predict` command.
 
 ## Visualization
 
