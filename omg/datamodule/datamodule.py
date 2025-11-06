@@ -32,6 +32,8 @@ from ase.data import chemical_symbols
 # map from file_format to file extension
 SUPPORTED_FORMAT = {"xyz": ".xyz"}
 SUPPORTED_PARSERS = ["ase"]
+OMG_CHEMICAL_SYMBOLS = {i: symbol for i, symbol in enumerate(chemical_symbols)}
+OMG_CHEMICAL_SYMBOLS[-1] = "Gh"  # ghost element!
 
 
 class Configuration:
@@ -109,7 +111,8 @@ class Configuration:
         cell = torch.asarray(fetched_configuration["cell"])
         # TODO: consistent Z -> symbol mapping -> Z mapping across all kliff
         species = [
-            chemical_symbols[int(i)] for i in fetched_configuration["atomic_numbers"]
+            OMG_CHEMICAL_SYMBOLS[int(i)]
+            for i in fetched_configuration["atomic_numbers"]
         ]
         coords = torch.asarray(fetched_configuration["positions"])
         PBC = [bool(i) for i in fetched_configuration["pbc"]]
@@ -182,7 +185,7 @@ class Configuration:
         key: str,
         dynamic: bool = False,
         property_keys: Tuple[str] = None,
-        floating_point_precision: torch.dtype = torch.float64
+        floating_point_precision: torch.dtype = torch.float64,
     ):
         """
         Read configuration from lmdb.
@@ -192,7 +195,7 @@ class Configuration:
             key: key to read the configuration from the lmdb.
         """
         if not dynamic:
-            with (env.begin() as txn):
+            with env.begin() as txn:
                 data = txn.get(key.encode())
                 if data is None:
                     raise ConfigurationError(f"Key {key} not found in the lmdb.")
@@ -214,13 +217,18 @@ class Configuration:
                         property_keys = (property_keys,)
                     for prop in property_keys:
                         property_dict[prop] = lmdb_config.get(prop, None)
-                        if (property_dict[prop] is not None and torch.is_tensor(property_dict[prop])
-                                and property_dict[prop].is_floating_point()):
-                            property_dict[prop] = property_dict[prop].to(floating_point_precision)
+                        if (
+                            property_dict[prop] is not None
+                            and torch.is_tensor(property_dict[prop])
+                            and property_dict[prop].is_floating_point()
+                        ):
+                            property_dict[prop] = property_dict[prop].to(
+                                floating_point_precision
+                            )
                 else:
                     property_dict = {}
 
-                species = [chemical_symbols[int(i)] for i in species]
+                species = [OMG_CHEMICAL_SYMBOLS[int(i)] for i in species]
                 PBC = [bool(i) for i in PBC]
                 config = cls(
                     cell,
@@ -382,7 +390,7 @@ class Configuration:
         have contiguous indices.
         """
         species, coords = zip(
-                *sorted(zip(self.species, self.coords), key=lambda pair: pair[0])
+            *sorted(zip(self.species, self.coords), key=lambda pair: pair[0])
         )
         self._species = torch.asarray(species)
         self._coords = torch.asarray(coords)
@@ -440,7 +448,7 @@ class Configuration:
                     config_dict = {
                         "cell": lmdb_config.get("cell", None),
                         "species": [
-                            chemical_symbols[int(i)]
+                            OMG_CHEMICAL_SYMBOLS[int(i)]
                             for i in lmdb_config.get("atomic_numbers", None)
                         ],
                         "coords": lmdb_config.get("pos", None),
@@ -462,7 +470,12 @@ class DataModule:
         configurations: A list of :class:`~kliff.dataset.Configuration` objects.
     """
 
-    def __init__(self, lmdb_paths=None, property_keys=None, trainer_precision: Union[int, str, None] = "64-true"):
+    def __init__(
+        self,
+        lmdb_paths=None,
+        property_keys=None,
+        trainer_precision: Union[int, str, None] = "64-true",
+    ):
         # if configurations is None:
         #     self._configs = []
         # elif isinstance(configurations, Iterable) and not isinstance(
@@ -473,16 +486,33 @@ class DataModule:
         #     raise DataModuleError(
         #         "configurations must be a iterable of Configuration objects."
         #     )
-        if trainer_precision == "64-true" or trainer_precision == "64" or trainer_precision == 64:
+        if (
+            trainer_precision == "64-true"
+            or trainer_precision == "64"
+            or trainer_precision == 64
+        ):
             self._floating_point_precision = torch.float64
-        elif (trainer_precision is None or trainer_precision == "32-true" or trainer_precision == "32" or
-              trainer_precision == 32 or trainer_precision == "16-mixed" or trainer_precision == "bf16-mixed"):
+        elif (
+            trainer_precision is None
+            or trainer_precision == "32-true"
+            or trainer_precision == "32"
+            or trainer_precision == 32
+            or trainer_precision == "16-mixed"
+            or trainer_precision == "bf16-mixed"
+        ):
             self._floating_point_precision = torch.float32
-        elif (trainer_precision == "16-true" or trainer_precision == "16" or trainer_precision == 16
-              or trainer_precision == "transformer-engine-float16"):
+        elif (
+            trainer_precision == "16-true"
+            or trainer_precision == "16"
+            or trainer_precision == 16
+            or trainer_precision == "transformer-engine-float16"
+        ):
             self._floating_point_precision = torch.float16
-        elif (trainer_precision == "bf16-true" or trainer_precision == "bf16"
-              or trainer_precision == "transformer-engine"):
+        elif (
+            trainer_precision == "bf16-true"
+            or trainer_precision == "bf16"
+            or trainer_precision == "transformer-engine"
+        ):
             self._floating_point_precision = torch.bfloat16
         else:
             raise ValueError(f"Unknown trainer precision: {trainer_precision}")
@@ -496,14 +526,26 @@ class DataModule:
 
         if lmdb_paths is not None:
             try:
-                self.from_lmdb(lmdb_paths, property_keys=property_keys, save_path=cache_dir)
+                self.from_lmdb(
+                    lmdb_paths, property_keys=property_keys, save_path=cache_dir
+                )
             except lmdb.Error:
                 # Try to use the data from the omg package.
                 if isinstance(lmdb_paths, Iterable):
-                    package_lmdb_paths = [files("omg").joinpath(lmdb_path) for lmdb_path in lmdb_paths]
-                    self.from_lmdb(package_lmdb_paths, property_keys=property_keys, save_path=cache_dir)
+                    package_lmdb_paths = [
+                        files("omg").joinpath(lmdb_path) for lmdb_path in lmdb_paths
+                    ]
+                    self.from_lmdb(
+                        package_lmdb_paths,
+                        property_keys=property_keys,
+                        save_path=cache_dir,
+                    )
                 else:
-                    self.from_lmdb(files("omg").joinpath(lmdb_paths), property_keys=property_keys, save_path=cache_dir)
+                    self.from_lmdb(
+                        files("omg").joinpath(lmdb_paths),
+                        property_keys=property_keys,
+                        save_path=cache_dir,
+                    )
 
     @classmethod
     @requires(MongoDatabase is not None, "colabfit-tools is not installed")
@@ -563,16 +605,18 @@ class DataModule:
         )
         if not data_objects:
             logger.error(f"{colabfit_dataset} is either empty or does not exist")
-            raise DataModuleError(f"{colabfit_dataset} is either empty or does not exist")
+            raise DataModuleError(
+                f"{colabfit_dataset} is either empty or does not exist"
+            )
 
         configs = []
         for data_object in data_objects:
-            configs.append(
-                Configuration.from_colabfit(database_client, data_object)
-            )
+            configs.append(Configuration.from_colabfit(database_client, data_object))
 
         if len(configs) <= 0:
-            raise DataModuleError(f"No dataset file with in {colabfit_dataset} dataset.")
+            raise DataModuleError(
+                f"No dataset file with in {colabfit_dataset} dataset."
+            )
 
         logger.info(f"{len(configs)} configurations read from {colabfit_dataset}")
 
@@ -648,9 +692,7 @@ class DataModule:
             A dataset of configurations.
         """
         instance = cls()
-        instance.add_from_ase(
-            path, ase_atoms_list, slices, file_format
-        )
+        instance.add_from_ase(path, ase_atoms_list, slices, file_format)
         return instance
 
     @staticmethod
@@ -775,7 +817,7 @@ class DataModule:
             path = Path(path)
 
         configs = self._read_from_ase(
-            path, ase_atoms_list,file_format=file_format, slices=slices
+            path, ase_atoms_list, file_format=file_format, slices=slices
         )
         self._configs.extend(configs)
 
@@ -789,7 +831,7 @@ class DataModule:
         reuse: bool = True,
         checksum: Optional[str] = None,
         property_keys: Tuple[str] = None,
-        use_transformed_if_available: bool = True
+        use_transformed_if_available: bool = True,
     ):
         """
         Read configurations from LMDB file and append to a dataset.
@@ -809,7 +851,14 @@ class DataModule:
         """
         # instance = self()
         self.add_from_lmdb(
-            path, dynamic_loading, subdir, save_path, reuse, checksum, property_keys, use_transformed_if_available
+            path,
+            dynamic_loading,
+            subdir,
+            save_path,
+            reuse,
+            checksum,
+            property_keys,
+            use_transformed_if_available,
         )
         self._property_keys = property_keys
         return self
@@ -823,7 +872,7 @@ class DataModule:
         reuse: bool = True,
         checksum: Optional[str] = None,
         property_keys: Tuple[str] = None,
-        use_transformed_if_available: bool = True
+        use_transformed_if_available: bool = True,
     ):
         """
         Read configurations from LMDB file and append to a dataset.
@@ -880,18 +929,27 @@ class DataModule:
 
         for lmdb_idx, lmdb_path in enumerate(path):
             env = lmdb.open(str(lmdb_path), readonly=True, lock=False, subdir=subdir)
-            configs = self._read_from_lmdb(env,  dynamic_loading, subdir, property_keys, self._floating_point_precision)
+            configs = self._read_from_lmdb(
+                env,
+                dynamic_loading,
+                subdir,
+                property_keys,
+                self._floating_point_precision,
+            )
 
             if dynamic_loading:
                 self.metadata.setdefault("lmdb_envs", []).append(env)
                 if process_configs:
                     configs_idx = torch.arange(
-                        len(self._configs), len(self._configs) + len(configs), dtype=torch.int64
+                        len(self._configs),
+                        len(self._configs) + len(configs),
+                        dtype=torch.int64,
                     )
                     self._configs = torch.cat((self._configs, configs_idx), dim=0)
                     with self.metadata["master_env"].begin(write=True) as txn:
-
-                        print(f"Adding {len(configs)} configurations to LMDB from {lmdb_path}")
+                        print(
+                            f"Adding {len(configs)} configurations to LMDB from {lmdb_path}"
+                        )
                         pbar = tqdm(total=len(configs))
                         for i, keys in zip(configs_idx, configs):
                             i_ = i.item() if isinstance(i, torch.Tensor) else i
@@ -908,7 +966,7 @@ class DataModule:
         dynamic_loading: bool,
         subdir: bool,
         property_keys: Tuple[str] = None,
-        floating_point_precision: torch.dtype = torch.float64
+        floating_point_precision: torch.dtype = torch.float64,
     ) -> Union[List[Configuration], List[str]]:
         """
         Read configurations from LMDB file.
@@ -930,8 +988,14 @@ class DataModule:
 
         if not dynamic_loading:
             configs = [
-                Configuration.from_lmdb(env, key, dynamic=False, property_keys=property_keys,
-                                        floating_point_precision=floating_point_precision) for key in keys
+                Configuration.from_lmdb(
+                    env,
+                    key,
+                    dynamic=False,
+                    property_keys=property_keys,
+                    floating_point_precision=floating_point_precision,
+                )
+                for key in keys
             ]
         else:
             configs = keys
@@ -987,8 +1051,12 @@ class DataModule:
                 key = lmdb_idx["config_key"]
                 idx = int(lmdb_idx["lmdb_env"])
                 env = self.metadata["lmdb_envs"][idx]
-                return Configuration.from_lmdb(env, key, property_keys=self._property_keys,
-                                               floating_point_precision=self._floating_point_precision)
+                return Configuration.from_lmdb(
+                    env,
+                    key,
+                    property_keys=self._property_keys,
+                    floating_point_precision=self._floating_point_precision,
+                )
 
             else:
                 if not self._return_config_on_getitem:
@@ -1005,8 +1073,14 @@ class DataModule:
                         key = lmdb_idx["config_key"]
                         idx = int(lmdb_idx["lmdb_env"])
                         env = self.metadata["lmdb_envs"][idx]
-                        configs.append(Configuration.from_lmdb(env, key, property_keys=self._property_keys,
-                                                               floating_point_precision=self._floating_point_precision))
+                        configs.append(
+                            Configuration.from_lmdb(
+                                env,
+                                key,
+                                property_keys=self._property_keys,
+                                floating_point_precision=self._floating_point_precision,
+                            )
+                        )
                     return DataModule(configs)
         else:
             if isinstance(idx, int):
@@ -1186,13 +1260,13 @@ class DataModule:
 
         if not save:
             if self.metadata.get("master_lmdb"):
-                logger.info(f"Removing master LMDB file: {self.metadata['master_lmdb']}")
+                logger.info(
+                    f"Removing master LMDB file: {self.metadata['master_lmdb']}"
+                )
                 shutil.rmtree(self.metadata["master_lmdb"], ignore_errors=True)
                 # if lmdb file is a file, not directory, remove the file
                 if self.metadata["master_lmdb"].is_file():
                     self.metadata["master_lmdb"].unlink()
-
-
 
     def toggle_lazy_config_fetch(self):
         """
@@ -1215,7 +1289,12 @@ class DataModule:
         self._return_config_on_getitem = True
         logger.warning(f"Lazy config fetch for seq: Disabled")
 
-    def transform_and_save(self, transform: Union[List[Callable], Callable], attributes: List, save_path: Path):
+    def transform_and_save(
+        self,
+        transform: Union[List[Callable], Callable],
+        attributes: List,
+        save_path: Path,
+    ):
         """
         Apply a transformation to the dataset and save the transformed dataset.
 
@@ -1233,15 +1312,29 @@ class OverfittingDataModule(DataModule):
 
     Can be used to overfit the model to a single configuration.
     """
-    def __init__(self, lmdb_paths=None, property_keys=None, structure_index: int = 0,
-                 trainer_precision: Union[int, str, None] = "64-true") -> None:
-        super().__init__(lmdb_paths=lmdb_paths, property_keys=property_keys, trainer_precision=trainer_precision)
+
+    def __init__(
+        self,
+        lmdb_paths=None,
+        property_keys=None,
+        structure_index: int = 0,
+        trainer_precision: Union[int, str, None] = "64-true",
+    ) -> None:
+        super().__init__(
+            lmdb_paths=lmdb_paths,
+            property_keys=property_keys,
+            trainer_precision=trainer_precision,
+        )
         if not 0 <= structure_index < len(self):
-            raise DataModuleError(f"Invalid structure index {structure_index}, "
-                                      f"possible values are 0 to {len(self) - 1}.")
+            raise DataModuleError(
+                f"Invalid structure index {structure_index}, "
+                f"possible values are 0 to {len(self) - 1}."
+            )
         self._structure_index = structure_index
 
-    def __getitem__(self, idx: Union[int, torch.Tensor, List]) -> Union[Configuration, "DataModule"]:
+    def __getitem__(
+        self, idx: Union[int, torch.Tensor, List]
+    ) -> Union[Configuration, "DataModule"]:
         """
         Get the configuration at index `idx`. If the index is a list, it returns a new
         dataset with the configurations at the indices.

@@ -12,6 +12,9 @@ import lightning as L
 from .datamodule import Configuration, DataModule
 from .utils import niggli_reduce_configuration, niggli_reduce_data
 
+OMG_ATOMIC_NUMBERS = {symbol: i for i, symbol in enumerate(atomic_numbers)}
+OMG_ATOMIC_NUMBERS["Gh"] = -1  # ghost element!
+
 
 class OMGData(Data):
     """
@@ -54,7 +57,9 @@ class OMGData(Data):
             return 0
 
     @classmethod
-    def from_omg_configuration(cls, config: Configuration, convert_to_fractional=True, niggli=False):
+    def from_omg_configuration(
+        cls, config: Configuration, convert_to_fractional=True, niggli=False
+    ):
         """
         Create a OMGData object from a :class:`omg.datamodule.Configuration` object.
 
@@ -73,7 +78,9 @@ class OMGData(Data):
         n_atoms = torch.tensor(len(config.species))
         graph.n_atoms = n_atoms
         graph.batch = torch.zeros(n_atoms, dtype=torch.int64)
-        graph.species = torch.tensor([atomic_numbers[z] for z in config.species], dtype=torch.int64)
+        graph.species = torch.tensor(
+            [OMG_ATOMIC_NUMBERS[z] for z in config.species], dtype=torch.int64
+        )
 
         assert isinstance(config.cell, torch.Tensor)
         graph.cell = config.cell
@@ -86,13 +93,23 @@ class OMGData(Data):
 
         if convert_to_fractional:
             with torch.no_grad():
-                graph.pos = torch.remainder(torch.matmul(graph.pos, torch.inverse(graph.cell)), 1.0)
+                graph.pos = torch.remainder(
+                    torch.matmul(graph.pos, torch.inverse(graph.cell)), 1.0
+                )
 
         graph.cell = graph.cell.unsqueeze(0)
         return graph
 
     @classmethod
-    def from_data(cls, species, pos, cell, property_dict={}, convert_to_fractional=True, niggli=False):
+    def from_data(
+        cls,
+        species,
+        pos,
+        cell,
+        property_dict={},
+        convert_to_fractional=True,
+        niggli=False,
+    ):
         """
         Create a OMGData object from the atomic species, positions and cell vectors.
 
@@ -115,7 +132,9 @@ class OMGData(Data):
         graph.n_atoms = n_atoms
         graph.batch = torch.zeros(n_atoms, dtype=torch.int64)
         if isinstance(species[0], str):
-            graph.species = torch.asarray([atomic_numbers[z] for z in species], dtype=torch.int64)
+            graph.species = torch.asarray(
+                [OMG_ATOMIC_NUMBERS[z] for z in species], dtype=torch.int64
+            )
         else:
             graph.species = torch.asarray(species, dtype=torch.int64)
 
@@ -128,7 +147,12 @@ class OMGData(Data):
         graph.property = {}
         if convert_to_fractional:
             with torch.no_grad():
-                graph.pos = torch.remainder(torch.matmul(graph.pos, torch.inverse(graph.cell).to(graph.pos.dtype)), 1.0)
+                graph.pos = torch.remainder(
+                    torch.matmul(
+                        graph.pos, torch.inverse(graph.cell).to(graph.pos.dtype)
+                    ),
+                    1.0,
+                )
 
         graph.property = property_dict
 
@@ -142,7 +166,13 @@ class OMGTorchDataset(Dataset):
     the use of :class:`omg.datamodule.Dataset` as a data source for the graph based models.
     """
 
-    def __init__(self, dataset: DataModule, transform=None, convert_to_fractional=True, niggli=False):
+    def __init__(
+        self,
+        dataset: DataModule,
+        transform=None,
+        convert_to_fractional=True,
+        niggli=False,
+    ):
         super().__init__("./", transform, None, None)
         self.dataset = dataset
         self.convert_to_fractional = convert_to_fractional
@@ -155,11 +185,16 @@ class OMGTorchDataset(Dataset):
         return len(self.dataset)
 
     def get(self, idx):
-        return OMGData.from_omg_configuration(self.dataset[idx], convert_to_fractional=self.convert_to_fractional,
-                                              niggli=self.niggli)
+        return OMGData.from_omg_configuration(
+            self.dataset[idx],
+            convert_to_fractional=self.convert_to_fractional,
+            niggli=self.niggli,
+        )
 
 
-def get_lightning_datamodule(train_dataset: Dataset, val_dataset: Dataset, batch_size: int):
+def get_lightning_datamodule(
+    train_dataset: Dataset, val_dataset: Dataset, batch_size: int
+):
     """
     Create a PyTorch Lightning datamodule from the datasets. This is just provided for
     ease of use, and the user can create their own datamodule if needed.
@@ -170,35 +205,47 @@ def get_lightning_datamodule(train_dataset: Dataset, val_dataset: Dataset, batch
 
     """
     num_workers = int(os.getenv("SLURM_CPUS_PER_TASK", "1"))
-    lightning_datamodule = LightningDataset(train_dataset, val_dataset,
-                                            batch_size=batch_size,
-                                            num_workers=num_workers)
+    lightning_datamodule = LightningDataset(
+        train_dataset, val_dataset, batch_size=batch_size, num_workers=num_workers
+    )
     return lightning_datamodule
+
 
 # TODO: Make len be the number of times we run through the generation pipeline
 class NullDataset(Dataset):
-    def __init__(self,):
+    def __init__(
+        self,
+    ):
         super().__init__()
 
     def get(self, idx: int) -> int:
         return idx
 
-    def len(self,):
+    def len(
+        self,
+    ):
         return 1
+
 
 class OMGDataModule(L.LightningDataModule):
     """
     Need to do this because LightningDataset doesn't directly subclass LightningDataModule
     """
-    def __init__(self, train_dataset: OMGTorchDataset, val_dataset: OMGTorchDataset,
-                 predict_dataset: Optional[OMGTorchDataset] = None, **kwargs) -> None:
+
+    def __init__(
+        self,
+        train_dataset: OMGTorchDataset,
+        val_dataset: OMGTorchDataset,
+        predict_dataset: Optional[OMGTorchDataset] = None,
+        **kwargs,
+    ) -> None:
         super().__init__()
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.predict_dataset = predict_dataset
         if self.val_dataset is None:
             self.val_dataloader = None
-        self.batch_size = kwargs.get('batch_size', 1)
+        self.batch_size = kwargs.get("batch_size", 1)
         self.kwargs = kwargs
 
     def dataloader(self, dataset: Dataset, **kwargs: Any) -> DataLoader:
@@ -208,8 +255,8 @@ class OMGDataModule(L.LightningDataModule):
         from torch.utils.data import IterableDataset
 
         shuffle = not isinstance(self.train_dataset, IterableDataset)
-        shuffle &= self.kwargs.get('sampler', None) is None
-        shuffle &= self.kwargs.get('batch_sampler', None) is None
+        shuffle &= self.kwargs.get("sampler", None) is None
+        shuffle &= self.kwargs.get("batch_sampler", None) is None
 
         return self.dataloader(
             self.train_dataset,
@@ -219,8 +266,8 @@ class OMGDataModule(L.LightningDataModule):
 
     def val_dataloader(self) -> DataLoader:
         kwargs = copy.copy(self.kwargs)
-        kwargs.pop('sampler', None)
-        kwargs.pop('batch_sampler', None)
+        kwargs.pop("sampler", None)
+        kwargs.pop("batch_sampler", None)
         return self.dataloader(self.val_dataset, shuffle=False, **self.kwargs)
 
     def predict_dataloader(self) -> DataLoader:
